@@ -1,0 +1,30 @@
+prerequisite:
+docker
+brew
+
+preinstall:
+brew install kind
+brew install helm
+
+yunikorn k8s cluster setup cmd:
+kind create cluster --config kind-config.yaml
+helm repo add yunikorn https://apache.github.io/yunikorn-release
+helm repo update
+kubectl create namespace yunikorn
+helm install yunikorn yunikorn/yunikorn --namespace yunikorn --version 1.7.0
+
+yunikorn dashboard:
+http://localhost:9889/#/dashboard
+
+submit spark job via spark-operator:
+helm repo add spark-operator https://kubeflow.github.io/spark-operator
+helm repo update
+helm install spark-operator spark-operator/spark-operator \
+ --namespace spark-operator \
+ --create-namespace \
+ --set controller.batchScheduler.enable=true \
+ --set controller.batchScheduler.default=yunikorn
+kubectl apply -f spark-pi.yaml
+
+export k8s cluster config so that it can be read from podwatcher
+kind export kubeconfig --name yunikorn-cluster --kubeconfig ~/.kube/kind-config
