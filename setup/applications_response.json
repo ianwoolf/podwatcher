@@ -1,0 +1,59 @@
+{
+    "applications": [
+        {
+            "applicationId": "spark-511370d2ad584c41a7cce9bae778b939",
+            "sparkAppSelector": "spark-511370d2ad584c41a7cce9bae778b939",
+            "pods": [
+                {
+                    "name": "spark-pi-yunikorn-driver",
+                    "namespace": "default",
+                    "applicationId": "",
+                    "sparkAppSelector": "spark-511370d2ad584c41a7cce9bae778b939",
+                    "phase": "Succeeded",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-19T11:10:55.716336756Z"
+                }
+            ],
+            "firstDeletedAt": "2026-05-19T11:10:55.716336756Z",
+            "lastDeletedAt": "2026-05-19T11:10:55.716336756Z",
+            "podCount": 1
+        },
+        {
+            "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
+            "sparkAppSelector": "",
+            "pods": [
+                {
+                    "name": "tg-spark-19de441f3bf94fbd830962-spark-driver-1444wbc0on",
+                    "namespace": "default",
+                    "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
+                    "sparkAppSelector": "",
+                    "phase": "Pending",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-19T11:11:07.363529455Z"
+                },
+                {
+                    "name": "tg-spark-19de441f3bf94fbd830962-spark-executor-lidhdoeo7q",
+                    "namespace": "default",
+                    "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
+                    "sparkAppSelector": "",
+                    "phase": "Running",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-19T11:11:30.382709957Z"
+                },
+                {
+                    "name": "spark-pi-bd0f3a9e3feeeb84-exec-1",
+                    "namespace": "default",
+                    "applicationId": "",
+                    "sparkAppSelector": "spark-19de441f3bf94fbd830962e9f3998903",
+                    "phase": "Succeeded",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-19T11:11:49.418770703Z"
+                }
+            ],
+            "firstDeletedAt": "2026-05-19T11:11:07.363529455Z",
+            "lastDeletedAt": "2026-05-19T11:11:49.418770703Z",
+            "podCount": 3
+        }
+    ],
+    "totalCount": 2
+}
