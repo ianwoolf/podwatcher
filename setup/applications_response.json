@@ -1,59 +1,77 @@
 {
     "applications": [
         {
-            "applicationId": "spark-511370d2ad584c41a7cce9bae778b939",
-            "sparkAppSelector": "spark-511370d2ad584c41a7cce9bae778b939",
+            "applicationId": "yunikorn-podwatcher-autogen",
+            "sparkAppSelector": "",
+            "pods": [
+                {
+                    "name": "podwatcher-f8884b776-jfl6m",
+                    "namespace": "podwatcher",
+                    "applicationId": "yunikorn-podwatcher-autogen",
+                    "sparkAppSelector": "",
+                    "phase": "Succeeded",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-20T07:34:35.756087503Z"
+                }
+            ],
+            "firstDeletedAt": "2026-05-20T07:34:35.756087503Z",
+            "lastDeletedAt": "2026-05-20T07:34:35.756087503Z",
+            "podCount": 1
+        },
+        {
+            "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
+            "sparkAppSelector": "spark-19de441f3bf94fbd830962e9f3998903",
             "pods": [
                 {
                     "name": "spark-pi-yunikorn-driver",
                     "namespace": "default",
                     "applicationId": "",
-                    "sparkAppSelector": "spark-511370d2ad584c41a7cce9bae778b939",
-                    "phase": "Succeeded",
-                    "node": "iv-yefc18gm4gfbyak1tnxc",
-                    "deletedAt": "2026-05-19T11:10:55.716336756Z"
-                }
-            ],
-            "firstDeletedAt": "2026-05-19T11:10:55.716336756Z",
-            "lastDeletedAt": "2026-05-19T11:10:55.716336756Z",
-            "podCount": 1
-        },
-        {
-            "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
-            "sparkAppSelector": "",
-            "pods": [
-                {
-                    "name": "tg-spark-19de441f3bf94fbd830962-spark-driver-1444wbc0on",
-                    "namespace": "default",
-                    "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
-                    "sparkAppSelector": "",
-                    "phase": "Pending",
-                    "node": "iv-yefc18gm4gfbyak1tnxc",
-                    "deletedAt": "2026-05-19T11:11:07.363529455Z"
-                },
-                {
-                    "name": "tg-spark-19de441f3bf94fbd830962-spark-executor-lidhdoeo7q",
-                    "namespace": "default",
-                    "applicationId": "spark-19de441f3bf94fbd830962e9f3998903",
-                    "sparkAppSelector": "",
-                    "phase": "Running",
-                    "node": "iv-yefc18gm4gfbyak1tnxc",
-                    "deletedAt": "2026-05-19T11:11:30.382709957Z"
-                },
-                {
-                    "name": "spark-pi-bd0f3a9e3feeeb84-exec-1",
-                    "namespace": "default",
-                    "applicationId": "",
                     "sparkAppSelector": "spark-19de441f3bf94fbd830962e9f3998903",
                     "phase": "Succeeded",
                     "node": "iv-yefc18gm4gfbyak1tnxc",
-                    "deletedAt": "2026-05-19T11:11:49.418770703Z"
+                    "deletedAt": "2026-05-20T07:47:24.438720961Z"
                 }
             ],
-            "firstDeletedAt": "2026-05-19T11:11:07.363529455Z",
-            "lastDeletedAt": "2026-05-19T11:11:49.418770703Z",
+            "firstDeletedAt": "2026-05-20T07:47:24.438720961Z",
+            "lastDeletedAt": "2026-05-20T07:47:24.438720961Z",
+            "podCount": 1
+        },
+        {
+            "applicationId": "spark-9403849c4e644f8ebe40b053a455d33f",
+            "sparkAppSelector": "",
+            "pods": [
+                {
+                    "name": "tg-spark-9403849c4e644f8ebe40b0-spark-driver-3q87so7yo1",
+                    "namespace": "default",
+                    "applicationId": "spark-9403849c4e644f8ebe40b053a455d33f",
+                    "sparkAppSelector": "",
+                    "phase": "Pending",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-20T07:47:37.842405034Z"
+                },
+                {
+                    "name": "tg-spark-9403849c4e644f8ebe40b0-spark-executor-lgv8va6p4y",
+                    "namespace": "default",
+                    "applicationId": "spark-9403849c4e644f8ebe40b053a455d33f",
+                    "sparkAppSelector": "",
+                    "phase": "Running",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-20T07:48:03.863475049Z"
+                },
+                {
+                    "name": "spark-pi-68021a9e445aff1d-exec-1",
+                    "namespace": "default",
+                    "applicationId": "",
+                    "sparkAppSelector": "spark-9403849c4e644f8ebe40b053a455d33f",
+                    "phase": "Succeeded",
+                    "node": "iv-yefc18gm4gfbyak1tnxc",
+                    "deletedAt": "2026-05-20T07:48:20.511436106Z"
+                }
+            ],
+            "firstDeletedAt": "2026-05-20T07:47:37.842405034Z",
+            "lastDeletedAt": "2026-05-20T07:48:20.511436106Z",
             "podCount": 3
         }
     ],
-    "totalCount": 2
+    "totalCount": 3
 }
