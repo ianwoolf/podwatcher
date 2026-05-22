@@ -1,19 +1,39 @@
 # podwatcher
 
-# render template (optional, for preview)
-helm template podwatcher ./charts/podwatcher > rendered.yaml
+## deploy (Helm template + Kustomize)
 
-# install or upgrade (idempotent, like kubectl apply)
-helm upgrade --install podwatcher ./charts/podwatcher --namespace podwatcher --create-namespace
+```bash
+# make targets
+make deploy-dev
+make deploy-uat
+make deploy-prod
 
-# uninstall
-helm uninstall podwatcher --namespace podwatcher
+# diff before deploy
+make diff-dev
+make diff-uat
+make diff-prod
+```
 
+actual commands:
+
+```bash
+# 1. helm template render
+helm template podwatcher ./charts/podwatcher > ./kustomize/base/rendered.yaml
+
+# 2. kubectl apply with overlay
+kubectl apply -k ./kustomize/overlays/dev
+kubectl apply -k ./kustomize/overlays/uat
+kubectl apply -k ./kustomize/overlays/prod
+```
+
+## k8s
+
+```bash
 kubectl rollout restart deployment podwatcher -n podwatcher
-
 kubectl edit svc yunikorn-service -n yunikorn
+```
 
-# check
+## check
 
 response of events `curl ip:8080/api/v1/events| jq .`: `setup/events_response.json
 

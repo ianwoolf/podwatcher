@@ -195,11 +195,6 @@ func (h *PodEventHandler) OnAdd(obj interface{}, isInInitialList bool) {
 		eventType = "INITIAL"
 	}
 
-	// 只保留 Succeeded
-	if pod.Status.Phase != corev1.PodSucceeded {
-		return
-	}
-
 	event := PodEvent{
 		Type:      eventType,
 		Namespace: pod.Namespace,
