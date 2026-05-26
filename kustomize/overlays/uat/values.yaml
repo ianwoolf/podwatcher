@@ -4,7 +4,7 @@ name: podwatcher
 replicaCount: 1
 image:
   repository: ianwoolf/sonic_lw
-  tag: 0.0.1
+  tag: 0.0.2
   pullPolicy: IfNotPresent
 serviceAccount:
   create: true
