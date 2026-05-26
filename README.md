@@ -1,5 +1,12 @@
 # podwatcher
 
+## push image
+
+```bash
+docker login -u ianwoolf
+docker push ianwoolf/sonic_lw:0.0.x
+```
+
 ## deploy (Helm template + Kustomize)
 
 ```bash
@@ -32,6 +39,10 @@ kubectl apply -k ./kustomize/overlays/prod
 kubectl rollout restart deployment podwatcher -n podwatcher
 kubectl edit svc yunikorn-service -n yunikorn
 ```
+
+## re-submit
+
+kubectl delete -f spark-pi.yml && sleep 1 && kubectl apply -f spark-pi.yml
 
 ## check
 
