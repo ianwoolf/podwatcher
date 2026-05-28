@@ -10,26 +10,28 @@ LOG_ROTATE_INTERVAL="${LOG_ROTATE_INTERVAL:-5min}"
 #     /etc/logrotate.d/podwatcher > /etc/logrotate.d/podwatcher.rendered
 # mv /etc/logrotate.d/podwatcher.rendered /etc/logrotate.d/podwatcher
 
-# 将间隔转换为 cron 格式
+# 将间隔转换为秒数
 case "$LOG_ROTATE_INTERVAL" in
     *min)
         MINS="${LOG_ROTATE_INTERVAL%%min}"
-        CRON_EXPR="*/${MINS} * * * *"
+        SECS=$((MINS * 60))
         ;;
     *h)
         HOURS="${LOG_ROTATE_INTERVAL%%h}"
-        CRON_EXPR="0 */${HOURS} * * *"
+        SECS=$((HOURS * 3600))
         ;;
     *)
-        CRON_EXPR="*/5 * * * *"
+        SECS=300
         ;;
 esac
 
-# 写入 crontab
-echo "${CRON_EXPR} /usr/sbin/logrotate /etc/logrotate.d/podwatcher" > /etc/crontabs/root
-
-# 启动 crond（后台）
-crond
+# 后台循环执行 logrotate（不需要 root / crond）
+(
+  while true; do
+      sleep "$SECS"
+      /usr/sbin/logrotate /etc/logrotate.d/podwatcher 2>/dev/null || true
+  done
+) &
 
 echo "logrotate configured: maxsize=${LOG_MAX_SIZE}, check every ${LOG_ROTATE_INTERVAL}"
 
