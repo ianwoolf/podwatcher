@@ -60,7 +60,9 @@ spec:
           configMap:
             name: {{ .Values.name }}-config
         - name: log
-          emptyDir: {}
+          hostPath:
+            path: /var/log/podwatcher
+            type: DirectoryOrCreate
         - name: logrotate
           configMap:
             name: {{ .Values.name }}-logrotate

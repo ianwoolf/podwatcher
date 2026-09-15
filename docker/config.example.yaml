@@ -11,3 +11,35 @@ log:
   maxSize: 100
 
   maxNum: 5
+
+pods:
+  # persist the pod watch resourceVersion so a short restart can resume and
+  # replay pod lifecycle events missed while the process was down
+  # (env: PODWATCHER_PODS_RESUME_FILE). Empty disables resume.
+  # Use a persistent volume to survive pod rescheduling; emptyDir survives
+  # container restarts within the same pod.
+  resumeFile: "/var/log/podwatcher/pods-resume.json"
+
+  # file to persist application credentials used to fetch Spark event logs
+  # (env: PODWATCHER_APPLICATIONS_FILE)
+  applicationsFile: "/var/log/podwatcher/applications.json"
+  # max application records kept; oldest deleted records are evicted
+  # (env: PODWATCHER_APPLICATIONS_MAX)
+  maxApplications: 1000
+
+  # file to persist driver/executor pod coordinates (name/node/time window)
+  # used to look up historical CPU/memory/disk metrics after pod deletion
+  # (env: PODWATCHER_POD_RECORDS_FILE)
+  podRecordsFile: "/var/log/podwatcher/pod-records.json"
+  # max pod records kept; oldest deleted records are evicted
+  # (env: PODWATCHER_POD_RECORDS_MAX)
+  maxPodRecords: 10000
+
+  # downstream checkpoint API base URL for the watch resourceVersion.
+  # When set, resume uses HTTP GET/PUT {checkpointUrl}/checkpoints/<key>
+  # instead of resumeFile (env: PODWATCHER_CHECKPOINT_URL).
+  checkpointUrl: ""
+  # resourceVersion checkpoint flush interval in seconds; must stay well
+  # below the cluster watch-history retention window
+  # (env: PODWATCHER_CHECKPOINT_FLUSH_SECONDS).
+  checkpointFlushSeconds: 10

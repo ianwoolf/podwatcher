@@ -45,6 +45,12 @@ data:
       file: "/var/log/podwatcher/podwatcher.log"
       maxSize: 100
       maxNum: 5
+    pods:
+      resumeFile: "/var/log/podwatcher/pods-resume.json"
+      applicationsFile: "/var/log/podwatcher/applications.json"
+      maxApplications: 1000
+      podRecordsFile: "/var/log/podwatcher/pod-records.json"
+      maxPodRecords: 10000
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -108,7 +114,9 @@ spec:
           configMap:
             name: podwatcher-config
         - name: log
-          emptyDir: {}
+          hostPath:
+            path: /var/log/podwatcher
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service

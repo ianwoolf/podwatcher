@@ -28,6 +28,16 @@ config:
     file: "/var/log/podwatcher/podwatcher.log"
     maxSize: 100
     maxNum: 5
+  pods:
+    resumeFile: "/var/log/podwatcher/pods-resume.json"
+    applicationsFile: "/var/log/podwatcher/applications.json"
+    maxApplications: 1000
+    podRecordsFile: "/var/log/podwatcher/pod-records.json"
+    maxPodRecords: 10000
+    # downstream checkpoint API for the watch resourceVersion; empty falls
+    # back to resumeFile. Override per environment in overlays.
+    checkpointUrl: ""
+    checkpointFlushSeconds: 10
 logrotate:
   conf: |-
     /var/log/podwatcher/podwatcher.log {

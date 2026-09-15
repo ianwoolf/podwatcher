@@ -8,19 +8,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LogConfig 日志配置
+// LogConfig controls klog log output.
 type LogConfig struct {
-	File    string `yaml:"file"`    // 日志文件路径
-	MaxSize int    `yaml:"maxSize"` // 单个日志文件最大 MB
-	MaxNum  int    `yaml:"maxNum"`  // 保留的旧日志文件数量
+	File    string `yaml:"file"`    // log file path
+	MaxSize int    `yaml:"maxSize"` // max size of each log file in MB
+	MaxNum  int    `yaml:"maxNum"`  // number of old log files to keep
 }
 
-// Config 应用配置
+// PodsConfig controls the pod informer and the application/pod record stores.
+type PodsConfig struct {
+	ResumeFile          string `yaml:"resumeFile"`             // file to persist the pod watch resourceVersion
+	ApplicationsFile    string `yaml:"applicationsFile"`       // file to persist application credentials
+	MaxApplications     int    `yaml:"maxApplications"`        // max application records kept (oldest deleted evicted)
+	PodRecordsFile      string `yaml:"podRecordsFile"`         // file to persist driver/executor pod coordinates
+	MaxPodRecords       int    `yaml:"maxPodRecords"`          // max pod records kept (oldest deleted evicted)
+	CheckpointURL       string `yaml:"checkpointUrl"`          // downstream checkpoint API base URL; when set, resourceVersion is checkpointed over HTTP instead of resumeFile
+	CheckpointFlushSecs int    `yaml:"checkpointFlushSeconds"` // resourceVersion checkpoint flush interval in seconds
+}
+
+// Config is the application configuration.
 type Config struct {
-	Log LogConfig `yaml:"log"`
+	Log  LogConfig  `yaml:"log"`
+	Pods PodsConfig `yaml:"pods"`
 }
 
-// DefaultConfig 返回默认配置
+// DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
 	return &Config{
 		Log: LogConfig{
@@ -28,14 +40,22 @@ func DefaultConfig() *Config {
 			MaxSize: 100,
 			MaxNum:  3,
 		},
+		Pods: PodsConfig{
+			ResumeFile:          "/var/log/podwatcher/pods-resume.json",
+			ApplicationsFile:    "/var/log/podwatcher/applications.json",
+			MaxApplications:     1000,
+			PodRecordsFile:      "/var/log/podwatcher/pod-records.json",
+			MaxPodRecords:       10000,
+			CheckpointFlushSecs: 10,
+		},
 	}
 }
 
-// Load 从配置文件加载配置，环境变量可覆盖
+// Load reads configuration from file (optional) and applies environment
+// variable overrides: env > config file > defaults.
 func Load(configPath string) (*Config, error) {
 	cfg := DefaultConfig()
 
-	// 从配置文件加载
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
@@ -46,7 +66,6 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
-	// 环境变量覆盖
 	if v := os.Getenv("PODWATCHER_LOG_FILE"); v != "" {
 		cfg.Log.File = v
 	}
@@ -58,6 +77,34 @@ func Load(configPath string) (*Config, error) {
 	if v := os.Getenv("PODWATCHER_LOG_MAX_NUM"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Log.MaxNum = n
+		}
+	}
+	if v := os.Getenv("PODWATCHER_PODS_RESUME_FILE"); v != "" {
+		cfg.Pods.ResumeFile = v
+	}
+	if v := os.Getenv("PODWATCHER_APPLICATIONS_FILE"); v != "" {
+		cfg.Pods.ApplicationsFile = v
+	}
+	if v := os.Getenv("PODWATCHER_APPLICATIONS_MAX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Pods.MaxApplications = n
+		}
+	}
+	if v := os.Getenv("PODWATCHER_POD_RECORDS_FILE"); v != "" {
+		cfg.Pods.PodRecordsFile = v
+	}
+	if v := os.Getenv("PODWATCHER_POD_RECORDS_MAX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Pods.MaxPodRecords = n
+		}
+	}
+
+	if v := os.Getenv("PODWATCHER_CHECKPOINT_URL"); v != "" {
+		cfg.Pods.CheckpointURL = v
+	}
+	if v := os.Getenv("PODWATCHER_CHECKPOINT_FLUSH_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Pods.CheckpointFlushSecs = n
 		}
 	}
 

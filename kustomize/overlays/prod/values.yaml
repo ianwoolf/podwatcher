@@ -28,6 +28,15 @@ config:
     file: "/var/log/podwatcher/podwatcher.log"
     maxSize: 100
     maxNum: 5
+  pods:
+    # downstream checkpoint API base URL (env: PODWATCHER_CHECKPOINT_URL).
+    # TODO: set to the prod checkpoint service before rollout.
+    checkpointUrl: ""
+    checkpointFlushSeconds: 10
+    # disk-less deployment: stores stay in memory, resume uses checkpointUrl.
+    resumeFile: ""
+    applicationsFile: ""
+    podRecordsFile: ""
 logrotate:
   conf: |-
     /var/log/podwatcher/podwatcher.log {

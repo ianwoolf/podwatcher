@@ -28,6 +28,11 @@ config:
     file: "/var/log/podwatcher/podwatcher.log"
     maxSize: 100
     maxNum: 5
+  pods:
+    # downstream checkpoint API base URL (env: PODWATCHER_CHECKPOINT_URL).
+    # TODO: set to the dev checkpoint service; empty keeps local-file resume.
+    checkpointUrl: ""
+    checkpointFlushSeconds: 10
 logrotate:
   conf: |-
     /var/log/podwatcher/podwatcher.log {

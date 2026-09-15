@@ -16,6 +16,7 @@ import (
 	"podwatcher/internal/handler"
 	"podwatcher/internal/informer"
 	"podwatcher/internal/service"
+	"podwatcher/internal/store"
 	"podwatcher/pkg/k8s"
 
 	"github.com/gin-gonic/gin"
@@ -37,7 +38,6 @@ func main() {
 		return
 	}
 
-	// 加载配置：环境变量 > 配置文件 > 默认值
 	configPath := os.Getenv("PODWATCHER_CONFIG")
 	if configPath == "" {
 		configPath = *configFile
@@ -48,10 +48,8 @@ func main() {
 		klog.Fatalf("Failed to load config: %v", err)
 	}
 
-	// 配置 klog 输出到文件
 	setupKlog(cfg)
 
-	// 在 setupKlog 之后解析 flag，确保 klog flag 设置生效
 	flag.Parse()
 
 	defer klog.Flush()
@@ -62,9 +60,13 @@ func main() {
 	}
 	klog.Info("Kubernetes client created successfully")
 
-	eventHandler := handler.NewPodEventHandler()
+	appStore := store.NewAppStore(cfg.Pods.ApplicationsFile, cfg.Pods.MaxApplications)
+	podStore := store.NewPodStore(cfg.Pods.PodRecordsFile, cfg.Pods.MaxPodRecords)
+	eventHandler := handler.NewPodEventHandler(appStore, podStore)
 
-	podInformerManager := informer.NewPodInformerManager(k8sClient, eventHandler)
+	resumeStore := buildResumeStore(cfg.Pods)
+	flushInterval := time.Duration(cfg.Pods.CheckpointFlushSecs) * time.Second
+	podInformerManager := informer.NewPodInformerManager(k8sClient, eventHandler, resumeStore, informer.WithFlushInterval(flushInterval))
 
 	if err := podInformerManager.Start(); err != nil {
 		klog.Fatalf("Failed to start informer: %v", err)
@@ -97,12 +99,31 @@ func main() {
 	defer cancel()
 
 	podInformerManager.Stop()
+	appStore.Stop()
+	podStore.Stop()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		klog.Errorf("Server forced to shutdown: %v", err)
 	}
 
 	klog.Info("Server exited")
+}
+
+// buildResumeStore selects the resourceVersion checkpoint backend: an HTTP
+// checkpoint API when configured, a local file for dev, or no persistence.
+// The manager watches all namespaces, so the checkpoint key is scoped to
+// _all; a namespaced deployment should use its namespace in the key.
+func buildResumeStore(cfg config.PodsConfig) store.ResumeStore {
+	switch {
+	case cfg.CheckpointURL != "":
+		key := "podwatcher:resume:_all"
+		klog.Infof("Checkpointing watch resourceVersion via %s (key=%s)", cfg.CheckpointURL, key)
+		return store.NewHTTPResumeStore(cfg.CheckpointURL, key)
+	case cfg.ResumeFile != "":
+		return store.NewFileResumeStore(cfg.ResumeFile)
+	default:
+		return store.NewNopResumeStore()
+	}
 }
 
 func setupRouter(podController *controller.PodController) *gin.Engine {
@@ -124,7 +145,10 @@ func setupRouter(podController *controller.PodController) *gin.Engine {
 
 		api.GET("/stats/pods", podController.GetPodStats)
 
-		api.GET("/spark-applications", podController.GetSparkApplications)
+		api.GET("/applications", podController.ListApplications)
+		api.GET("/applications/:applicationId", podController.GetApplication)
+
+		api.GET("/pod-records", podController.ListPodRecords)
 	}
 
 	router.GET("/", func(c *gin.Context) {
@@ -137,7 +161,9 @@ func setupRouter(podController *controller.PodController) *gin.Engine {
 				"GET  /api/v1/pods/:namespace/:name",
 				"GET  /api/v1/events?limit=",
 				"GET  /api/v1/stats/pods?namespace=",
-				"GET  /api/v1/spark-applications?startTime=&endTime=",
+				"GET  /api/v1/applications?since=<RFC3339>&limit=&applicationId=&status=<csv>",
+				"GET  /api/v1/applications/:applicationId",
+				"GET  /api/v1/pod-records?applicationId=&role=&node=&status=&startTime=&endTime=&limit=",
 			},
 		})
 	})
@@ -148,26 +174,21 @@ func setupRouter(podController *controller.PodController) *gin.Engine {
 func setupKlog(cfg *config.Config) {
 	logCfg := cfg.Log
 
-	// 确保 maxNum 有合理默认值
 	if logCfg.MaxNum <= 0 {
 		logCfg.MaxNum = 3
 	}
 
-	// 确保日志目录存在
 	logDir := filepath.Dir(logCfg.File)
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		klog.Fatalf("Failed to create log directory %s: %v", logDir, err)
 	}
 
-	// 设置 klog flag
 	if err := flag.Set("log_file", logCfg.File); err != nil {
 		klog.Fatalf("Failed to set log_file: %v", err)
 	}
 	if err := flag.Set("log_file_max_size", strconv.Itoa(logCfg.MaxSize)); err != nil {
 		klog.Fatalf("Failed to set log_file_max_size: %v", err)
 	}
-	// log_file_max_num not supported by klog v2.140.0
-	// 日志轮转数量通过 logrotate 或外部工具管理
 	if err := flag.Set("logtostderr", "false"); err != nil {
 		klog.Fatalf("Failed to set logtostderr: %v", err)
 	}
