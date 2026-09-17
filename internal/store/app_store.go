@@ -390,10 +390,11 @@ func AppIDFromPod(pod *corev1.Pod) string {
 	if appID := pod.Labels["appSparkID"]; appID != "" {
 		return appID
 	}
-	if appID := pod.Labels["applicationId"]; appID != "" {
-		return appID
-	}
-	return pod.Labels["spark-app-selector"]
+	// if appID := pod.Labels["applicationId"]; appID != "" {
+	// 	return appID
+	// }
+	// return pod.Labels["spark-app-selector"]
+	return ""
 }
 
 // podStatus derives a human-readable status from the pod phase and deleted flag.
