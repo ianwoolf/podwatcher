@@ -25,7 +25,7 @@ pods:
   applicationsFile: "/var/log/podwatcher/applications.json"
   # max application records kept; oldest deleted records are evicted
   # (env: PODWATCHER_APPLICATIONS_MAX)
-  maxApplications: 1000
+  maxApplications: 10000
 
   # file to persist driver/executor pod coordinates (name/node/time window)
   # used to look up historical CPU/memory/disk metrics after pod deletion

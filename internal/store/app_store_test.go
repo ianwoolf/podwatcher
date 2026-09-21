@@ -11,6 +11,7 @@ import (
 	"podwatcher/internal/testutil"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestAppStoreDriverLifecycle(t *testing.T) {
@@ -74,13 +75,13 @@ func TestAppStoreExecutorDoesNotDriveStatus(t *testing.T) {
 	}
 }
 
-func TestAppStoreAppIDFallback(t *testing.T) {
+func TestAppStoreRequiresAppSparkID(t *testing.T) {
 	s := NewAppStore("", 0)
 	pod := testutil.PlainPod("sel-driver", map[string]string{"spark-role": "driver", "spark-app-selector": "spark-selector-xyz"}, corev1.PodRunning)
 	s.Upsert(pod, false)
 	recs, _ := s.GetChanges(time.Time{}, 0, "", nil)
-	if len(recs) != 1 || recs[0].ApplicationID != "spark-selector-xyz" {
-		t.Fatalf("expected selector fallback, got %+v", recs)
+	if len(recs) != 0 {
+		t.Fatalf("pods without appSparkID must not be tracked, got %+v", recs)
 	}
 }
 
@@ -92,8 +93,8 @@ func TestAppIDFromPod(t *testing.T) {
 	}{
 		{name: "appSparkID takes precedence", labels: map[string]string{"appSparkID": "internal-1", "applicationId": "legacy-1", "spark-app-selector": "selector-1"}, want: "internal-1"},
 		{name: "appSparkID only", labels: map[string]string{"appSparkID": "internal-2"}, want: "internal-2"},
-		{name: "applicationId fallback", labels: map[string]string{"applicationId": "legacy-3", "spark-app-selector": "selector-3"}, want: "legacy-3"},
-		{name: "selector fallback", labels: map[string]string{"spark-app-selector": "selector-4"}, want: "selector-4"},
+		{name: "applicationId alone is ignored", labels: map[string]string{"applicationId": "legacy-3", "spark-app-selector": "selector-3"}, want: ""},
+		{name: "selector alone is ignored", labels: map[string]string{"spark-app-selector": "selector-4"}, want: ""},
 		{name: "empty values fall through", labels: map[string]string{"appSparkID": "", "applicationId": "", "spark-app-selector": ""}, want: ""},
 		{name: "nil labels", labels: nil, want: ""},
 	}
@@ -346,5 +347,90 @@ func TestAppStoreLoadsTransitionalWrappedLayout(t *testing.T) {
 	}
 	if recs[0].ChangedAt.IsZero() || !recs[1].ChangedAt.After(recs[0].ChangedAt) {
 		t.Fatalf("wrapped legacy changedAt should be backfilled, got %v %v", recs[0].ChangedAt, recs[1].ChangedAt)
+	}
+}
+
+func TestAppStoreBootstrapAnchorsChangedAt(t *testing.T) {
+	s := NewAppStore("", 0)
+	created := time.Now().Add(-time.Hour).Truncate(time.Second)
+
+	s.Bootstrap(testutil.DriverPod("app-b-driver", "app-b", corev1.PodRunning, created))
+	rec, ok := s.GetRecord("app-b")
+	if !ok {
+		t.Fatal("expected bootstrapped application record")
+	}
+	if rec.Status != "running" || rec.DriverPodName != "app-b-driver" {
+		t.Fatalf("bootstrap should populate state fields, got %+v", rec)
+	}
+	if !rec.ChangedAt.Equal(created) {
+		t.Fatalf("bootstrap changedAt should anchor to creationTimestamp, got %v want %v", rec.ChangedAt, created)
+	}
+
+	// Anchored in the past: a since cursor at/after creation sees no change.
+	if changes, _ := s.GetChanges(created, 0, "", nil); len(changes) != 0 {
+		t.Fatalf("bootstrap must not appear after a caught-up cursor, got %+v", changes)
+	}
+}
+
+func TestAppStoreBootstrapTerminalAnchorsFinishedAt(t *testing.T) {
+	s := NewAppStore("", 0)
+	created := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	finished := time.Now().Add(-30 * time.Minute).Truncate(time.Second)
+	pod := testutil.DriverPod("app-f-driver", "app-f", corev1.PodSucceeded, created)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "spark-kubernetes-driver",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			StartedAt:  metav1.NewTime(created),
+			FinishedAt: metav1.NewTime(finished),
+		}},
+	}}
+
+	s.Bootstrap(pod)
+	rec, _ := s.GetRecord("app-f")
+	if rec.FinishedAt == nil || !rec.ChangedAt.Equal(finished) {
+		t.Fatalf("terminal bootstrap should anchor changedAt to finishedAt, got %+v", rec)
+	}
+}
+
+func TestAppStoreBootstrapZeroTimeFallsBackToNow(t *testing.T) {
+	s := NewAppStore("", 0)
+	pod := testutil.DriverPod("app-z-driver", "app-z", corev1.PodRunning, time.Time{})
+	pod.ObjectMeta.CreationTimestamp = metav1.Time{}
+	before := time.Now()
+
+	s.Bootstrap(pod)
+	rec, _ := s.GetRecord("app-z")
+	if rec.ChangedAt.IsZero() || rec.ChangedAt.Before(before) {
+		t.Fatalf("bootstrap without history should fall back to now, got %v", rec.ChangedAt)
+	}
+}
+
+func TestAppStoreBootstrapDoesNotMoveExisting(t *testing.T) {
+	s := NewAppStore("", 0)
+	created := time.Now().Add(-time.Hour).Truncate(time.Second)
+	s.Upsert(testutil.DriverPod("app-e-driver", "app-e", corev1.PodRunning, created), false)
+	rec, _ := s.GetRecord("app-e")
+	changed := rec.ChangedAt
+
+	s.Bootstrap(testutil.DriverPod("app-e-driver", "app-e", corev1.PodRunning, created))
+	rec, _ = s.GetRecord("app-e")
+	if !rec.ChangedAt.Equal(changed) {
+		t.Fatalf("bootstrap of an existing record must not move changedAt, got %v want %v", rec.ChangedAt, changed)
+	}
+}
+
+func TestAppStoreRealEventAfterBootstrapAdvances(t *testing.T) {
+	s := NewAppStore("", 0)
+	created := time.Now().Add(-time.Hour).Truncate(time.Second)
+	s.Bootstrap(testutil.DriverPod("app-a-driver", "app-a", corev1.PodRunning, created))
+
+	s.Upsert(testutil.DriverPod("app-a-driver", "app-a", corev1.PodSucceeded, created), false)
+	rec, _ := s.GetRecord("app-a")
+	if rec.Status != "succeeded" || !rec.ChangedAt.After(created) {
+		t.Fatalf("real terminal event should advance anchored changedAt, got %+v", rec)
+	}
+	changes, _ := s.GetChanges(created, 0, "", nil)
+	if len(changes) != 1 || changes[0].ApplicationID != "app-a" {
+		t.Fatalf("real event should be visible after the bootstrap anchor, got %+v", changes)
 	}
 }

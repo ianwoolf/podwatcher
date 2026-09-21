@@ -44,8 +44,8 @@ func newTestPodManager(pods ...*corev1.Pod) *PodInformerManager {
 }
 
 func TestPodRelistInitial(t *testing.T) {
-	p1 := testPod("default", "spark-driver", "10", map[string]string{"applicationId": "app-1", "spark-role": "driver"})
-	p2 := testPod("default", "spark-exec-1", "10", map[string]string{"applicationId": "app-1", "spark-role": "executor"})
+	p1 := testPod("default", "spark-driver", "10", map[string]string{"appSparkID": "app-1", "spark-role": "driver"})
+	p2 := testPod("default", "spark-exec-1", "10", map[string]string{"appSparkID": "app-1", "spark-role": "executor"})
 	p3 := testPod("default", "web", "11", nil)
 	m := newTestPodManager(p1, p2, p3)
 
@@ -79,8 +79,8 @@ func TestPodReplayLifecycle(t *testing.T) {
 
 	// Pod created and deleted while the watcher was down: it is not in the
 	// snapshot/store, but the Deleted event must still be dispatched because
-	// the deleted object carries its labels (e.g. applicationId).
-	gone := testPod("default", "gone-driver", "20", map[string]string{"applicationId": "app-gone", "spark-role": "driver"})
+	// the deleted object carries its labels (e.g. appSparkID).
+	gone := testPod("default", "gone-driver", "20", map[string]string{"appSparkID": "app-gone", "spark-role": "driver"})
 	m.onDeleted(gone)
 	events := h.GetEvents(0)
 	if len(events) != 1 || events[0].Type != "DELETED" || events[0].Name != "gone-driver" {
@@ -93,12 +93,12 @@ func TestPodReplayLifecycle(t *testing.T) {
 
 	// Snapshot holds a newer version of a live pod; an older replayed Added
 	// must be skipped (no event, store version unchanged).
-	live := testPod("default", "live-driver", "100", map[string]string{"applicationId": "app-live", "spark-role": "driver"})
+	live := testPod("default", "live-driver", "100", map[string]string{"appSparkID": "app-live", "spark-role": "driver"})
 	live.Status.Phase = corev1.PodRunning
 	if err := m.store.Add(live); err != nil {
 		t.Fatalf("store add: %v", err)
 	}
-	stale := testPod("default", "live-driver", "90", map[string]string{"applicationId": "app-live", "spark-role": "driver"})
+	stale := testPod("default", "live-driver", "90", map[string]string{"appSparkID": "app-live", "spark-role": "driver"})
 	before := len(h.GetEvents(0))
 	m.onAdded(stale)
 	if got := len(h.GetEvents(0)); got != before {
@@ -111,7 +111,7 @@ func TestPodReplayLifecycle(t *testing.T) {
 	}
 
 	// A newer replayed Modified (phase -> Succeeded) is dispatched.
-	newer := testPod("default", "live-driver", "110", map[string]string{"applicationId": "app-live", "spark-role": "driver"})
+	newer := testPod("default", "live-driver", "110", map[string]string{"appSparkID": "app-live", "spark-role": "driver"})
 	newer.Status.Phase = corev1.PodSucceeded
 	m.onModified(newer)
 	events = h.GetEvents(0)
@@ -120,7 +120,7 @@ func TestPodReplayLifecycle(t *testing.T) {
 	}
 
 	// A brand-new pod replayed as Added is dispatched.
-	fresh := testPod("default", "fresh-driver", "120", map[string]string{"applicationId": "app-fresh", "spark-role": "driver"})
+	fresh := testPod("default", "fresh-driver", "120", map[string]string{"appSparkID": "app-fresh", "spark-role": "driver"})
 	m.onAdded(fresh)
 	events = h.GetEvents(0)
 	if len(events) != before+2 || events[0].Type != "ADDED" || events[0].Name != "fresh-driver" {

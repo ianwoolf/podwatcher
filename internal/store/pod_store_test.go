@@ -204,3 +204,44 @@ func TestPodStoreCapturesLabels(t *testing.T) {
 		t.Fatalf("labels must survive deletion, got %+v", deleted)
 	}
 }
+
+func TestPodStoreBootstrapAnchorsLastUpdatedAt(t *testing.T) {
+	s := NewPodStore("", 0)
+	created := time.Now().Add(-time.Hour).Truncate(time.Second)
+	started := time.Now().Add(-30 * time.Minute).Truncate(time.Second)
+	pod := testutil.WithUID(testutil.DriverPod("app-b-driver", "app-b", corev1.PodRunning, created), "uid-b")
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "spark-kubernetes-driver",
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(started)}},
+	}}
+
+	s.Bootstrap(pod)
+	recs := s.GetRecords(PodRecordFilter{ApplicationID: "app-b"})
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 bootstrapped record, got %+v", recs)
+	}
+	if !recs[0].LastUpdatedAt.Equal(started) {
+		t.Fatalf("bootstrap should anchor lastUpdatedAt to container start, got %v want %v", recs[0].LastUpdatedAt, started)
+	}
+	if recs[0].DeletedAt != nil {
+		t.Fatalf("bootstrap must never mark a record deleted, got %+v", recs[0])
+	}
+
+	// A time window ending before the anchor must not return the record.
+	windowEnd := started.Add(-time.Minute)
+	if old := s.GetRecords(PodRecordFilter{End: &windowEnd}); len(old) != 0 {
+		t.Fatalf("bootstrapped record must not appear in a pre-start window, got %+v", old)
+	}
+}
+
+func TestPodStoreBootstrapFallsBackToCreationTimestamp(t *testing.T) {
+	s := NewPodStore("", 0)
+	created := time.Now().Add(-time.Hour).Truncate(time.Second)
+	pod := testutil.WithUID(testutil.DriverPod("app-c-driver", "app-c", corev1.PodPending, created), "uid-c")
+
+	s.Bootstrap(pod)
+	recs := s.GetRecords(PodRecordFilter{ApplicationID: "app-c"})
+	if len(recs) != 1 || !recs[0].LastUpdatedAt.Equal(created) {
+		t.Fatalf("bootstrap should anchor to creationTimestamp without container times, got %+v", recs)
+	}
+}

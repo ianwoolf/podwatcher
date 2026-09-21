@@ -85,6 +85,18 @@ func (s *PodStore) Stop() {
 // Upsert creates or updates the record for a Spark pod. On deletion it marks
 // the record deleted and timestamps it.
 func (s *PodStore) Upsert(pod *corev1.Pod, deleted bool) {
+	s.upsert(pod, deleted, false)
+}
+
+// Bootstrap seeds or refreshes a record from the startup list/snapshot. The
+// coordinates are recorded, but lastUpdatedAt is anchored to the pod's own
+// start time so a restart snapshot keeps historical time-window semantics
+// instead of jumping to the top of every query; deletion is never implied.
+func (s *PodStore) Bootstrap(pod *corev1.Pod) {
+	s.upsert(pod, false, true)
+}
+
+func (s *PodStore) upsert(pod *corev1.Pod, deleted, bootstrap bool) {
 	appID := AppIDFromPod(pod)
 	role := SparkRole(pod)
 	if appID == "" || role == "" {
@@ -144,14 +156,31 @@ func (s *PodStore) Upsert(pod *corev1.Pod, deleted bool) {
 		deletionTimestamp := pod.DeletionTimestamp.Time
 		rec.DeletionTimestamp = &deletionTimestamp
 	}
-	rec.LastUpdatedAt = now
-	if deleted {
-		deletedAt := now
-		rec.DeletedAt = &deletedAt
+	if bootstrap {
+		rec.LastUpdatedAt = bootstrapPodTime(pod, now)
+	} else {
+		rec.LastUpdatedAt = now
+		if deleted {
+			deletedAt := now
+			rec.DeletedAt = &deletedAt
+		}
 	}
 
 	s.evictLocked()
 	s.dirty = true
+}
+
+// bootstrapPodTime anchors the update time of a snapshot-seeded record to the
+// pod's own history: the main container start time (or pod start time via
+// containerTimes), then the creation timestamp, falling back to now.
+func bootstrapPodTime(pod *corev1.Pod, fallback time.Time) time.Time {
+	if started, _ := containerTimes(pod); started != nil {
+		return *started
+	}
+	if !pod.CreationTimestamp.IsZero() {
+		return pod.CreationTimestamp.Time
+	}
+	return fallback
 }
 
 // podKey identifies a pod by UID, falling back to namespace/name for objects

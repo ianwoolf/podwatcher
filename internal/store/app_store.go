@@ -49,7 +49,7 @@ type AppStore struct {
 // a background flush loop. maxRecords <= 0 uses the default.
 func NewAppStore(filePath string, maxRecords int) *AppStore {
 	if maxRecords <= 0 {
-		maxRecords = 1000
+		maxRecords = 10000
 	}
 	s := &AppStore{
 		records:    make(map[string]*ApplicationRecord),
@@ -72,6 +72,19 @@ func (s *AppStore) Stop() {
 // driver pods drive status/finishedAt/deletedAt and changedAt; executor churn
 // merely refreshes lastUpdatedAt and never reaches the incremental feed.
 func (s *AppStore) Upsert(pod *corev1.Pod, deleted bool) {
+	s.upsert(pod, deleted, false)
+}
+
+// Bootstrap seeds or refreshes a record from the startup list/snapshot
+// without treating the current state as a freshly observed lifecycle change.
+// Fields are populated as usual, but changedAt is anchored to the pod's own
+// history and the global change cursor never advances, so a restart snapshot
+// cannot flood the incremental feed.
+func (s *AppStore) Bootstrap(pod *corev1.Pod) {
+	s.upsert(pod, false, true)
+}
+
+func (s *AppStore) upsert(pod *corev1.Pod, deleted, bootstrap bool) {
 	appID := AppIDFromPod(pod)
 	if appID == "" {
 		return
@@ -97,7 +110,9 @@ func (s *AppStore) Upsert(pod *corev1.Pod, deleted bool) {
 			CreatedAt:     created,
 		}
 		s.records[appID] = rec
-		lifecycleChanged = true
+		if !bootstrap {
+			lifecycleChanged = true
+		}
 	}
 
 	if created := pod.CreationTimestamp.Time; !created.IsZero() && created.Before(rec.CreatedAt) {
@@ -117,7 +132,9 @@ func (s *AppStore) Upsert(pod *corev1.Pod, deleted bool) {
 		rec.DriverPodName = pod.Name
 		if nextStatus := podStatus(pod, deleted); rec.Status != nextStatus {
 			rec.Status = nextStatus
-			lifecycleChanged = true
+			if !bootstrap {
+				lifecycleChanged = true
+			}
 		}
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			if rec.FinishedAt == nil {
@@ -126,17 +143,29 @@ func (s *AppStore) Upsert(pod *corev1.Pod, deleted bool) {
 					finished = *containerFinished
 				}
 				rec.FinishedAt = &finished
-				lifecycleChanged = true
+				if !bootstrap {
+					lifecycleChanged = true
+				}
 			}
 		}
 		if deleted && rec.DeletedAt == nil {
 			deletedAt := now
 			rec.DeletedAt = &deletedAt
-			lifecycleChanged = true
+			if !bootstrap {
+				lifecycleChanged = true
+			}
 		}
 	}
 
-	if lifecycleChanged {
+	if bootstrap {
+		// Snapshot-seeded records are anchored to real history; bootstrapping
+		// an already known record (e.g. persisted file plus startup snapshot)
+		// never moves its change cursor.
+		if !exists {
+			rec.ChangedAt = bootstrapChangedAt(pod, rec, now)
+			s.dirty = true
+		}
+	} else if lifecycleChanged {
 		// Stamp a strictly increasing change time, bumped by at least 1ms so
 		// that multiple changes inside the same millisecond never collide.
 		next := now
@@ -154,6 +183,20 @@ func (s *AppStore) Upsert(pod *corev1.Pod, deleted bool) {
 	if s.evictLocked() {
 		s.dirty = true
 	}
+}
+
+// bootstrapChangedAt anchors the change time of a snapshot-seeded record to
+// the pod's own history: the terminal finish time when present, otherwise the
+// creation timestamp, falling back to now when neither is available so the
+// record can never become invisible to the incremental feed.
+func bootstrapChangedAt(pod *corev1.Pod, rec *ApplicationRecord, fallback time.Time) time.Time {
+	if rec.FinishedAt != nil {
+		return *rec.FinishedAt
+	}
+	if created := pod.CreationTimestamp.Time; !created.IsZero() {
+		return created
+	}
+	return fallback
 }
 
 // evictLocked drops the oldest deleted records until the size is within the

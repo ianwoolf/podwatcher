@@ -17,6 +17,7 @@ func DriverPod(name, appID string, phase corev1.PodPhase, created time.Time) *co
 	}
 	if appID != "" {
 		labels["applicationId"] = appID
+		labels["appSparkID"] = appID
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -38,6 +39,7 @@ func ExecutorPod(name, appID string) *corev1.Pod {
 			Name:      name,
 			Labels: map[string]string{
 				"spark-role":         "executor",
+				"appSparkID":         appID,
 				"applicationId":      appID,
 				"spark-app-selector": appID,
 				"spark-exec-id":      name,

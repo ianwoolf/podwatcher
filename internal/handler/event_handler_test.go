@@ -72,6 +72,27 @@ func TestHandlerInitialSyncMarkedInitial(t *testing.T) {
 	}
 }
 
+func TestHandlerInitialSyncBootstrapsStores(t *testing.T) {
+	h := newTestHandler()
+	created := time.Now().Add(-time.Hour).Truncate(time.Second)
+
+	h.OnAdd(testutil.DriverPod("app-b-driver", "app-b", corev1.PodPending, created), true)
+
+	// Anchored in the past, the snapshot record is invisible to a caught-up
+	// incremental cursor and not stamped with the restart time.
+	if recent, _ := h.GetApplications(time.Now(), 0, "", nil); len(recent) != 0 {
+		t.Fatalf("initial-sync bootstrap must not surface in recent changes, got %+v", recent)
+	}
+	all, _ := h.GetApplications(time.Time{}, 0, "", nil)
+	if len(all) != 1 || !all[0].ChangedAt.Equal(created) {
+		t.Fatalf("bootstrap application should be anchored to creationTimestamp, got %+v", all)
+	}
+	pods := h.GetPodRecords(store.PodRecordFilter{ApplicationID: "app-b"})
+	if len(pods) != 1 || !pods[0].LastUpdatedAt.Equal(created) {
+		t.Fatalf("bootstrap pod record should be anchored to creationTimestamp, got %+v", pods)
+	}
+}
+
 func TestHandlerTerminalTransitions(t *testing.T) {
 	h := newTestHandler()
 	running := testutil.DriverPod("app-f-driver", "app-f", corev1.PodRunning, metav1.Now().Time)

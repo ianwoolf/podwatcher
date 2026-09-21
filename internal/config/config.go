@@ -43,7 +43,7 @@ func DefaultConfig() *Config {
 		Pods: PodsConfig{
 			ResumeFile:          "/var/log/podwatcher/pods-resume.json",
 			ApplicationsFile:    "/var/log/podwatcher/applications.json",
-			MaxApplications:     1000,
+			MaxApplications:     10000,
 			PodRecordsFile:      "/var/log/podwatcher/pod-records.json",
 			MaxPodRecords:       10000,
 			CheckpointFlushSecs: 10,

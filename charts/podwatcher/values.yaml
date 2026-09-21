@@ -31,7 +31,7 @@ config:
   pods:
     resumeFile: "/var/log/podwatcher/pods-resume.json"
     applicationsFile: "/var/log/podwatcher/applications.json"
-    maxApplications: 1000
+    maxApplications: 10000
     podRecordsFile: "/var/log/podwatcher/pod-records.json"
     maxPodRecords: 10000
     # downstream checkpoint API for the watch resourceVersion; empty falls

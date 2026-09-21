@@ -55,8 +55,15 @@ func (h *PodEventHandler) OnAdd(obj interface{}, isInInitialList bool) {
 		return
 	}
 
-	h.podStore.Upsert(pod, false)
-	h.appStore.Upsert(pod, false)
+	// Startup snapshot/replay seeding is a bootstrap: the stores record the
+	// current state without advancing incremental-feed cursors.
+	if isInInitialList {
+		h.podStore.Bootstrap(pod)
+		h.appStore.Bootstrap(pod)
+	} else {
+		h.podStore.Upsert(pod, false)
+		h.appStore.Upsert(pod, false)
+	}
 
 	if role != "driver" {
 		return
