@@ -87,7 +87,7 @@ type PodRecordsQuery struct {
 
 // GetApplications returns one page of the incremental application feed.
 // sinceParam/limitParam are the raw query values.
-func (s *PodService) GetApplications(sinceParam, limitParam, appID, statusParam string) ([]store.ApplicationRecord, bool, error) {
+func (s *PodService) GetApplications(sinceParam, limitParam, appID, statusParam string) ([]store.ApplicationView, bool, error) {
 	since := time.Time{}
 	if sinceParam != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, sinceParam)
@@ -132,7 +132,7 @@ func parseStatuses(statusParam string) []string {
 	return statuses
 }
 
-func (s *PodService) GetApplication(appID string) (store.ApplicationRecord, bool) {
+func (s *PodService) GetApplication(appID string) (store.ApplicationView, bool) {
 	return s.eventHandler.GetApplication(appID)
 }
 

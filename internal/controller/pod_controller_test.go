@@ -18,7 +18,7 @@ import (
 
 func newTestApplicationsRouter(t *testing.T) *gin.Engine {
 	t.Helper()
-	eventHandler := handler.NewPodEventHandler(store.NewAppStore("", 0), store.NewPodStore("", 0))
+	eventHandler := handler.NewPodEventHandler(store.NewStore("", 0, 0))
 	eventHandler.OnAdd(testutil.DriverPod("app-a-driver", "app-a", corev1.PodRunning, time.Now()), false)
 	eventHandler.OnAdd(testutil.DriverPod("app-b-driver", "app-b", corev1.PodSucceeded, time.Now()), false)
 	ctrl := NewPodController(service.NewPodService(nil, eventHandler))

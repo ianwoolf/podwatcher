@@ -31,7 +31,7 @@ func testPod(namespace, name, rv string, labels map[string]string) *corev1.Pod {
 }
 
 func newTestEventHandler() *handler.PodEventHandler {
-	return handler.NewPodEventHandler(store.NewAppStore("", 0), store.NewPodStore("", 0))
+	return handler.NewPodEventHandler(store.NewStore("", 0, 0))
 }
 
 func newTestPodManager(pods ...*corev1.Pod) *PodInformerManager {

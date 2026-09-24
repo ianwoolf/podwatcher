@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net/http"
 	"os"
@@ -60,9 +61,17 @@ func main() {
 	}
 	klog.Info("Kubernetes client created successfully")
 
-	appStore := store.NewAppStore(cfg.Pods.ApplicationsFile, cfg.Pods.MaxApplications)
-	podStore := store.NewPodStore(cfg.Pods.PodRecordsFile, cfg.Pods.MaxPodRecords)
-	eventHandler := handler.NewPodEventHandler(appStore, podStore)
+	stateStore := store.NewStore(cfg.Pods.StateFile, cfg.Pods.MaxApplications, cfg.Pods.MaxPodRecords)
+	// One-time migration from the pre-single-file layout: only when no state
+	// snapshot exists yet, read the legacy sibling files if present.
+	if _, statErr := os.Stat(cfg.Pods.StateFile); errors.Is(statErr, os.ErrNotExist) {
+		stateDir := filepath.Dir(cfg.Pods.StateFile)
+		stateStore.ImportLegacy(
+			filepath.Join(stateDir, "applications.json"),
+			filepath.Join(stateDir, "pod-records.json"),
+		)
+	}
+	eventHandler := handler.NewPodEventHandler(stateStore)
 
 	resumeStore := buildResumeStore(cfg.Pods)
 	flushInterval := time.Duration(cfg.Pods.CheckpointFlushSecs) * time.Second
@@ -99,8 +108,7 @@ func main() {
 	defer cancel()
 
 	podInformerManager.Stop()
-	appStore.Stop()
-	podStore.Stop()
+	stateStore.Stop()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		klog.Errorf("Server forced to shutdown: %v", err)

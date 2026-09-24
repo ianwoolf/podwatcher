@@ -30,9 +30,8 @@ config:
     maxNum: 5
   pods:
     resumeFile: "/var/log/podwatcher/pods-resume.json"
-    applicationsFile: "/var/log/podwatcher/applications.json"
-    maxApplications: 10000
-    podRecordsFile: "/var/log/podwatcher/pod-records.json"
+    stateFile: "/var/log/podwatcher/state.json"
+    maxApplications: 5000
     maxPodRecords: 10000
     # downstream checkpoint API for the watch resourceVersion; empty falls
     # back to resumeFile. Override per environment in overlays.

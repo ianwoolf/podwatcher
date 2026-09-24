@@ -20,18 +20,19 @@ pods:
   # container restarts within the same pod.
   resumeFile: "/var/log/podwatcher/pods-resume.json"
 
-  # file to persist application credentials used to fetch Spark event logs
-  # (env: PODWATCHER_APPLICATIONS_FILE)
-  applicationsFile: "/var/log/podwatcher/applications.json"
-  # max application records kept; oldest deleted records are evicted
+  # single file persisting application credentials (used to fetch Spark event
+  # logs) together with driver/executor pod coordinates (name/node/time
+  # window, used to look up historical CPU/memory/disk metrics after pod
+  # deletion)
+  # (env: PODWATCHER_STATE_FILE)
+  stateFile: "/var/log/podwatcher/state.json"
+  # max application records kept; oldest deleted records are evicted and take
+  # their pod records with them
   # (env: PODWATCHER_APPLICATIONS_MAX)
-  maxApplications: 10000
+  maxApplications: 5000
 
-  # file to persist driver/executor pod coordinates (name/node/time window)
-  # used to look up historical CPU/memory/disk metrics after pod deletion
-  # (env: PODWATCHER_POD_RECORDS_FILE)
-  podRecordsFile: "/var/log/podwatcher/pod-records.json"
-  # max pod records kept; oldest deleted records are evicted
+  # max pod records kept; oldest deleted executor records are evicted while a
+  # live application's driver is retained
   # (env: PODWATCHER_POD_RECORDS_MAX)
   maxPodRecords: 10000
 

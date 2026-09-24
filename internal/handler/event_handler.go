@@ -31,16 +31,14 @@ type PodEventHandler struct {
 	events     []PodEvent
 	eventsLock sync.RWMutex
 	maxEvents  int
-	appStore   *store.AppStore
-	podStore   *store.PodStore
+	stateStore *store.Store
 }
 
-func NewPodEventHandler(appStore *store.AppStore, podStore *store.PodStore) *PodEventHandler {
+func NewPodEventHandler(stateStore *store.Store) *PodEventHandler {
 	return &PodEventHandler{
-		events:    make([]PodEvent, 0),
-		maxEvents: 1000,
-		appStore:  appStore,
-		podStore:  podStore,
+		events:     make([]PodEvent, 0),
+		maxEvents:  1000,
+		stateStore: stateStore,
 	}
 }
 
@@ -58,11 +56,9 @@ func (h *PodEventHandler) OnAdd(obj interface{}, isInInitialList bool) {
 	// Startup snapshot/replay seeding is a bootstrap: the stores record the
 	// current state without advancing incremental-feed cursors.
 	if isInInitialList {
-		h.podStore.Bootstrap(pod)
-		h.appStore.Bootstrap(pod)
+		h.stateStore.BootstrapPod(pod)
 	} else {
-		h.podStore.Upsert(pod, false)
-		h.appStore.Upsert(pod, false)
+		h.stateStore.UpsertPod(pod, false)
 	}
 
 	if role != "driver" {
@@ -101,9 +97,8 @@ func (h *PodEventHandler) OnUpdate(oldObj, newObj interface{}) {
 		return
 	}
 
-	// Keep both stores current on every tracked pod change.
-	h.podStore.Upsert(newPod, false)
-	h.appStore.Upsert(newPod, false)
+	// Keep the state current on every tracked pod change.
+	h.stateStore.UpsertPod(newPod, false)
 
 	// The diagnostic stream records a driver lifecycle event only on the
 	// transition to a terminal phase (Succeeded/Failed) to avoid noise from
@@ -138,8 +133,7 @@ func (h *PodEventHandler) OnDelete(obj interface{}) {
 		return
 	}
 
-	h.podStore.Upsert(pod, true)
-	h.appStore.Upsert(pod, true)
+	h.stateStore.UpsertPod(pod, true)
 
 	if role != "driver" {
 		return
@@ -209,17 +203,17 @@ func (h *PodEventHandler) GetStats() map[string]int {
 // GetApplications returns one changedAt-ordered page of application
 // credentials changed strictly after since, optionally filtered by exact
 // applicationId and a set of statuses.
-func (h *PodEventHandler) GetApplications(since time.Time, limit int, appID string, statuses []string) ([]store.ApplicationRecord, bool) {
-	return h.appStore.GetChanges(since, limit, appID, statuses)
+func (h *PodEventHandler) GetApplications(since time.Time, limit int, appID string, statuses []string) ([]store.ApplicationView, bool) {
+	return h.stateStore.GetChanges(since, limit, appID, statuses)
 }
 
 // GetApplication returns one application credential by id.
-func (h *PodEventHandler) GetApplication(appID string) (store.ApplicationRecord, bool) {
-	return h.appStore.GetRecord(appID)
+func (h *PodEventHandler) GetApplication(appID string) (store.ApplicationView, bool) {
+	return h.stateStore.GetApplication(appID)
 }
 
 // GetPodRecords returns historical driver/executor pod coordinates matching
 // the filter.
 func (h *PodEventHandler) GetPodRecords(filter store.PodRecordFilter) []store.PodRecord {
-	return h.podStore.GetRecords(filter)
+	return h.stateStore.GetPodRecords(filter)
 }

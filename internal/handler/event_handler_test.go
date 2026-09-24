@@ -12,7 +12,7 @@ import (
 )
 
 func newTestHandler() *PodEventHandler {
-	return NewPodEventHandler(store.NewAppStore("", 0), store.NewPodStore("", 0))
+	return NewPodEventHandler(store.NewStore("", 0, 0))
 }
 
 func TestHandlerTracksDriverAndExecutor(t *testing.T) {

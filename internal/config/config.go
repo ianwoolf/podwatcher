@@ -18,9 +18,8 @@ type LogConfig struct {
 // PodsConfig controls the pod informer and the application/pod record stores.
 type PodsConfig struct {
 	ResumeFile          string `yaml:"resumeFile"`             // file to persist the pod watch resourceVersion
-	ApplicationsFile    string `yaml:"applicationsFile"`       // file to persist application credentials
 	MaxApplications     int    `yaml:"maxApplications"`        // max application records kept (oldest deleted evicted)
-	PodRecordsFile      string `yaml:"podRecordsFile"`         // file to persist driver/executor pod coordinates
+	StateFile           string `yaml:"stateFile"`              // file to persist applications and driver/executor pod coordinates
 	MaxPodRecords       int    `yaml:"maxPodRecords"`          // max pod records kept (oldest deleted evicted)
 	CheckpointURL       string `yaml:"checkpointUrl"`          // downstream checkpoint API base URL; when set, resourceVersion is checkpointed over HTTP instead of resumeFile
 	CheckpointFlushSecs int    `yaml:"checkpointFlushSeconds"` // resourceVersion checkpoint flush interval in seconds
@@ -42,9 +41,8 @@ func DefaultConfig() *Config {
 		},
 		Pods: PodsConfig{
 			ResumeFile:          "/var/log/podwatcher/pods-resume.json",
-			ApplicationsFile:    "/var/log/podwatcher/applications.json",
-			MaxApplications:     10000,
-			PodRecordsFile:      "/var/log/podwatcher/pod-records.json",
+			StateFile:           "/var/log/podwatcher/state.json",
+			MaxApplications:     5000,
 			MaxPodRecords:       10000,
 			CheckpointFlushSecs: 10,
 		},
@@ -82,16 +80,13 @@ func Load(configPath string) (*Config, error) {
 	if v := os.Getenv("PODWATCHER_PODS_RESUME_FILE"); v != "" {
 		cfg.Pods.ResumeFile = v
 	}
-	if v := os.Getenv("PODWATCHER_APPLICATIONS_FILE"); v != "" {
-		cfg.Pods.ApplicationsFile = v
-	}
 	if v := os.Getenv("PODWATCHER_APPLICATIONS_MAX"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Pods.MaxApplications = n
 		}
 	}
-	if v := os.Getenv("PODWATCHER_POD_RECORDS_FILE"); v != "" {
-		cfg.Pods.PodRecordsFile = v
+	if v := os.Getenv("PODWATCHER_STATE_FILE"); v != "" {
+		cfg.Pods.StateFile = v
 	}
 	if v := os.Getenv("PODWATCHER_POD_RECORDS_MAX"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
