@@ -25,10 +25,19 @@ type PodsConfig struct {
 	CheckpointFlushSecs int    `yaml:"checkpointFlushSeconds"` // resourceVersion checkpoint flush interval in seconds
 }
 
+// ClusterConfig identifies the ConfigMap that holds the local cluster
+// identity, which is stamped into every application and pod record.
+type ClusterConfig struct {
+	ConfigMapName      string `yaml:"configMapName"`      // configmap holding the cluster identity
+	ConfigMapNamespace string `yaml:"configMapNamespace"` // namespace of the configmap; empty uses the pod namespace, then default
+	ConfigMapKey       string `yaml:"configMapKey"`       // key whose value is the cluster identity
+}
+
 // Config is the application configuration.
 type Config struct {
-	Log  LogConfig  `yaml:"log"`
-	Pods PodsConfig `yaml:"pods"`
+	Log     LogConfig     `yaml:"log"`
+	Pods    PodsConfig    `yaml:"pods"`
+	Cluster ClusterConfig `yaml:"cluster"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -45,6 +54,10 @@ func DefaultConfig() *Config {
 			MaxApplications:     5000,
 			MaxPodRecords:       10000,
 			CheckpointFlushSecs: 10,
+		},
+		Cluster: ClusterConfig{
+			ConfigMapName: "cluster-cm",
+			ConfigMapKey:  "currentCluster",
 		},
 	}
 }
@@ -101,6 +114,16 @@ func Load(configPath string) (*Config, error) {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Pods.CheckpointFlushSecs = n
 		}
+	}
+
+	if v := os.Getenv("PODWATCHER_CLUSTER_CM_NAME"); v != "" {
+		cfg.Cluster.ConfigMapName = v
+	}
+	if v := os.Getenv("PODWATCHER_CLUSTER_CM_NAMESPACE"); v != "" {
+		cfg.Cluster.ConfigMapNamespace = v
+	}
+	if v := os.Getenv("PODWATCHER_CLUSTER_CM_KEY"); v != "" {
+		cfg.Cluster.ConfigMapKey = v
 	}
 
 	return cfg, nil

@@ -735,3 +735,57 @@ func TestStoreImportLegacy(t *testing.T) {
 		t.Fatalf("expected migrated state to reload, got %+v", recs)
 	}
 }
+
+func TestStoreStampsCluster(t *testing.T) {
+	s := NewStore("", 0, 0, WithCluster("cluster-a"))
+
+	s.UpsertPod(testutil.DriverPod("app-c-driver", "app-c", corev1.PodRunning, time.Now()), false)
+	app, ok := s.GetApplication("app-c")
+	if !ok {
+		t.Fatal("expected application record")
+	}
+	if app.Cluster != "cluster-a" {
+		t.Fatalf("application cluster = %q want cluster-a", app.Cluster)
+	}
+
+	s.UpsertPod(testutil.ExecutorPod("app-c-exec-1", "app-c"), false)
+	for _, rec := range s.GetPodRecords(PodRecordFilter{ApplicationID: "app-c"}) {
+		if rec.Cluster != "cluster-a" {
+			t.Fatalf("pod record %s cluster = %q want cluster-a", rec.Name, rec.Cluster)
+		}
+	}
+}
+
+func TestStoreBackfillsClusterOnLoad(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	snapshot := stateSnapshot{
+		Version:      1,
+		Applications: []ApplicationRecord{{ApplicationID: "old", Status: "running", ChangedAt: time.Now()}},
+		Pods: []PodRecord{{
+			UID: "old-pod", ApplicationID: "old", Name: "old-driver", Role: "driver", Status: "running",
+		}},
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(stateFile, 10, 10, WithCluster("cluster-a"))
+	defer s.Stop()
+
+	app, ok := s.GetApplication("old")
+	if !ok {
+		t.Fatal("expected loaded application")
+	}
+	if app.Cluster != "cluster-a" {
+		t.Fatalf("backfilled application cluster = %q want cluster-a", app.Cluster)
+	}
+	for _, rec := range s.GetPodRecords(PodRecordFilter{}) {
+		if rec.Cluster != "cluster-a" {
+			t.Fatalf("backfilled pod record cluster = %q want cluster-a", rec.Cluster)
+		}
+	}
+}

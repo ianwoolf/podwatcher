@@ -44,3 +44,16 @@ pods:
   # below the cluster watch-history retention window
   # (env: PODWATCHER_CHECKPOINT_FLUSH_SECONDS).
   checkpointFlushSeconds: 10
+
+# cluster identity loaded from a ConfigMap and stamped into every
+# application and pod record. Read once at startup.
+cluster:
+  # configmap name (env: PODWATCHER_CLUSTER_CM_NAME)
+  configMapName: "cluster-cm"
+  # namespace of the configmap. Empty uses the pod namespace via the
+  # POD_NAMESPACE downward API, then "default"
+  # (env: PODWATCHER_CLUSTER_CM_NAMESPACE)
+  configMapNamespace: ""
+  # key holding the cluster identity
+  # (env: PODWATCHER_CLUSTER_CM_KEY)
+  configMapKey: "currentCluster"

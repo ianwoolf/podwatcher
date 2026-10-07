@@ -61,7 +61,9 @@ func main() {
 	}
 	klog.Info("Kubernetes client created successfully")
 
-	stateStore := store.NewStore(cfg.Pods.StateFile, cfg.Pods.MaxApplications, cfg.Pods.MaxPodRecords)
+	clusterName := loadClusterIdentity(k8sClient, cfg.Cluster)
+
+	stateStore := store.NewStore(cfg.Pods.StateFile, cfg.Pods.MaxApplications, cfg.Pods.MaxPodRecords, store.WithCluster(clusterName))
 	// One-time migration from the pre-single-file layout: only when no state
 	// snapshot exists yet, read the legacy sibling files if present.
 	if _, statErr := os.Stat(cfg.Pods.StateFile); errors.Is(statErr, os.ErrNotExist) {
@@ -132,6 +134,32 @@ func buildResumeStore(cfg config.PodsConfig) store.ResumeStore {
 	default:
 		return store.NewNopResumeStore()
 	}
+}
+
+// loadClusterIdentity reads the cluster identity from the configured
+// ConfigMap once at startup. Namespace resolution: explicit config ->
+// POD_NAMESPACE (pod namespace via downward API) -> default. A failure is
+// non-fatal: records are stored without cluster and a restart picks it up.
+func loadClusterIdentity(k8sClient *k8s.Client, cfg config.ClusterConfig) string {
+	namespace := cfg.ConfigMapNamespace
+	if namespace == "" {
+		namespace = os.Getenv("POD_NAMESPACE")
+	}
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cluster, err := k8s.ConfigMapValue(ctx, k8sClient.Clientset, namespace, cfg.ConfigMapName, cfg.ConfigMapKey)
+	if err != nil {
+		klog.Warningf("Failed to load cluster identity from configmap %s/%s[%s]; records will be stored without cluster: %v",
+			namespace, cfg.ConfigMapName, cfg.ConfigMapKey, err)
+		return ""
+	}
+	klog.Infof("Cluster identity loaded: %s", cluster)
+	return cluster
 }
 
 func setupRouter(podController *controller.PodController) *gin.Engine {

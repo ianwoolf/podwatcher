@@ -18,6 +18,7 @@ import (
 // single driver pod; executor pods only refresh identity and timestamps.
 type ApplicationRecord struct {
 	ApplicationID    string     `json:"applicationId"`
+	Cluster          string     `json:"cluster,omitempty"`
 	SparkAppName     string     `json:"sparkAppName,omitempty"`
 	SparkAppSelector string     `json:"sparkAppSelector,omitempty"`
 	Namespace        string     `json:"namespace"`
@@ -37,6 +38,7 @@ type ApplicationRecord struct {
 // still needed to look up historical CPU/memory/disk metrics.
 type PodRecord struct {
 	UID                 string            `json:"uid"`
+	Cluster             string            `json:"cluster,omitempty"`
 	ApplicationID       string            `json:"applicationId"`
 	Namespace           string            `json:"namespace"`
 	Name                string            `json:"name"`
@@ -86,6 +88,7 @@ type Store struct {
 	apps            map[string]*ApplicationRecord
 	pods            map[string]*PodRecord
 	driverByApp     map[string]string
+	cluster         string
 	lastChanged     time.Time
 	maxApps         int
 	maxPods         int
@@ -95,9 +98,17 @@ type Store struct {
 	stopCh          chan struct{}
 }
 
+// Option customizes a Store at construction.
+type Option func(*Store)
+
+// WithCluster stamps cluster into every application and pod record.
+func WithCluster(cluster string) Option {
+	return func(s *Store) { s.cluster = cluster }
+}
+
 // NewStore loads any persisted state from filePath (if set) and starts a
 // background flush loop. A non-positive limit uses the default.
-func NewStore(filePath string, maxApps, maxPods int) *Store {
+func NewStore(filePath string, maxApps, maxPods int, opts ...Option) *Store {
 	if maxApps <= 0 {
 		maxApps = 10000
 	}
@@ -112,6 +123,9 @@ func NewStore(filePath string, maxApps, maxPods int) *Store {
 		maxPods:     maxPods,
 		filePath:    filePath,
 		stopCh:      make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.load()
 	go s.persistLoop()
@@ -189,6 +203,9 @@ func (s *Store) upsertAppLocked(pod *corev1.Pod, appID string, deleted, bootstra
 
 	if created := pod.CreationTimestamp.Time; !created.IsZero() && created.Before(rec.CreatedAt) {
 		rec.CreatedAt = created
+	}
+	if s.cluster != "" {
+		rec.Cluster = s.cluster
 	}
 	if rec.Namespace == "" {
 		rec.Namespace = pod.Namespace
@@ -276,6 +293,9 @@ func (s *Store) upsertPodRecordLocked(pod *corev1.Pod, appID, role string, delet
 
 	if created := pod.CreationTimestamp.Time; !created.IsZero() && created.Before(rec.CreatedAt) {
 		rec.CreatedAt = created
+	}
+	if s.cluster != "" {
+		rec.Cluster = s.cluster
 	}
 	rec.ApplicationID = appID
 	rec.Namespace = pod.Namespace
@@ -620,8 +640,33 @@ func (s *Store) load() {
 
 	s.mu.Lock()
 	s.ingestLocked(snapshot.Applications, snapshot.Pods)
+	if s.backfillClusterLocked() {
+		s.dirty = true
+	}
 	s.mu.Unlock()
 	klog.Infof("Loaded %d applications and %d pod records from %s", len(snapshot.Applications), len(snapshot.Pods), s.filePath)
+}
+
+// backfillClusterLocked stamps the cluster identity onto persisted records
+// written before it was known. Caller must hold the write lock.
+func (s *Store) backfillClusterLocked() bool {
+	if s.cluster == "" {
+		return false
+	}
+	changed := false
+	for _, rec := range s.apps {
+		if rec.Cluster == "" {
+			rec.Cluster = s.cluster
+			changed = true
+		}
+	}
+	for _, rec := range s.pods {
+		if rec.Cluster == "" {
+			rec.Cluster = s.cluster
+			changed = true
+		}
+	}
+	return changed
 }
 
 // ingestLocked indexes loaded records and rebuilds the change-time clock.
