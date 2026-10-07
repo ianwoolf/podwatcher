@@ -1,4 +1,6 @@
 namespace: podwatcher
+# Additional container env entries, including valueFrom.secretKeyRef.
+extraEnv: []
 createNamespace: true
 name: podwatcher
 replicaCount: 1
@@ -24,6 +26,14 @@ env:
   LOG_MAX_SIZE: "100M"
   LOG_ROTATE_INTERVAL: "5min"
 config:
+  cluster:
+    # Empty preserves ConfigMap discovery; set to the injected variable name.
+    nameEnv: ""
+  elasticsearch:
+    address: ""
+    username: ""
+    passwordEnv: "ES_PASSWORD"
+    index: "podwatcher-events"
   log:
     file: "/var/log/podwatcher/podwatcher.log"
     maxSize: 100

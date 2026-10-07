@@ -9,11 +9,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"podwatcher/internal/config"
 	"podwatcher/internal/controller"
+	"podwatcher/internal/elasticsearch"
 	"podwatcher/internal/handler"
 	"podwatcher/internal/informer"
 	"podwatcher/internal/service"
@@ -33,6 +35,7 @@ var (
 
 func main() {
 	klog.InitFlags(nil)
+	flag.Parse()
 
 	if *showVersion {
 		klog.Info("podwatcher v1.0.0")
@@ -50,8 +53,6 @@ func main() {
 	}
 
 	setupKlog(cfg)
-
-	flag.Parse()
 
 	defer klog.Flush()
 
@@ -73,7 +74,15 @@ func main() {
 			filepath.Join(stateDir, "pod-records.json"),
 		)
 	}
-	eventHandler := handler.NewPodEventHandler(stateStore)
+	var handlerOptions []handler.Option
+	if cfg.Elasticsearch.Address != "" {
+		publisher, err := elasticsearch.NewClient(cfg.Elasticsearch, clusterName)
+		if err != nil {
+			klog.Fatalf("Failed to configure Elasticsearch: %v", err)
+		}
+		handlerOptions = append(handlerOptions, handler.WithPublisher(publisher))
+	}
+	eventHandler := handler.NewPodEventHandler(stateStore, handlerOptions...)
 
 	resumeStore := buildResumeStore(cfg.Pods)
 	flushInterval := time.Duration(cfg.Pods.CheckpointFlushSecs) * time.Second
@@ -136,11 +145,18 @@ func buildResumeStore(cfg config.PodsConfig) store.ResumeStore {
 	}
 }
 
-// loadClusterIdentity reads the cluster identity from the configured
-// ConfigMap once at startup. Namespace resolution: explicit config ->
+// loadClusterIdentity reads the configured environment variable when set,
+// otherwise the legacy ConfigMap once at startup. Namespace resolution: explicit config ->
 // POD_NAMESPACE (pod namespace via downward API) -> default. A failure is
 // non-fatal: records are stored without cluster and a restart picks it up.
 func loadClusterIdentity(k8sClient *k8s.Client, cfg config.ClusterConfig) string {
+	if cfg.NameEnv != "" {
+		cluster := strings.TrimSpace(os.Getenv(cfg.NameEnv))
+		if cluster == "" {
+			klog.Warningf("Cluster environment variable %q is empty", cfg.NameEnv)
+		}
+		return cluster
+	}
 	namespace := cfg.ConfigMapNamespace
 	if namespace == "" {
 		namespace = os.Getenv("POD_NAMESPACE")

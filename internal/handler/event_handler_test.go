@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,7 +11,99 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 )
+
+type publishedEvent struct {
+	kind    string
+	pod     *corev1.Pod
+	initial bool
+}
+type testPublisher struct {
+	events []publishedEvent
+	err    error
+}
+
+type completionPublisher struct {
+	testPublisher
+	applications []store.ApplicationView
+}
+
+func (p *completionPublisher) PublishApplication(_ context.Context, app store.ApplicationView) error {
+	p.applications = append(p.applications, app)
+	return nil
+}
+
+func TestApplicationCompletionPublishing(t *testing.T) {
+	for _, phase := range []corev1.PodPhase{corev1.PodSucceeded, corev1.PodFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			s := store.NewStore("", 0, 0)
+			defer s.Stop()
+			p := &completionPublisher{}
+			h := NewPodEventHandler(s, WithPublisher(p))
+			driver := testutil.DriverPod("driver", "app", corev1.PodRunning, time.Now())
+			h.OnAdd(driver, false)
+			h.OnAdd(testutil.ExecutorPod("executor", "app"), false)
+			if len(p.applications) != 0 {
+				t.Fatal("running apps must not publish completion")
+			}
+			terminal := driver.DeepCopy()
+			terminal.Status.Phase = phase
+			finished := time.Now().Add(-time.Minute)
+			terminal.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "main", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{FinishedAt: metav1.NewTime(finished)}}}}
+			h.OnUpdate(driver, terminal)
+			if len(p.applications) != 1 || p.applications[0].FinishedAt == nil || !p.applications[0].FinishedAt.Equal(finished) {
+				t.Fatalf("incorrect completion: %+v", p.applications)
+			}
+			h.OnDelete(terminal)
+			if len(p.applications) != 2 || !p.applications[1].FinishedAt.Equal(finished) {
+				t.Fatal("delete must preserve completion time")
+			}
+		})
+	}
+}
+
+func TestInitialAndDeletedApplicationCompletion(t *testing.T) {
+	s := store.NewStore("", 0, 0)
+	defer s.Stop()
+	p := &completionPublisher{}
+	h := NewPodEventHandler(s, WithPublisher(p))
+	h.OnAdd(testutil.DriverPod("finished", "old", corev1.PodSucceeded, time.Now()), true)
+	h.OnDelete(testutil.DriverPod("interrupted", "new", corev1.PodRunning, time.Now()))
+	if len(p.applications) != 2 || p.applications[0].FinishedAt == nil || p.applications[1].FinishedAt == nil || p.applications[1].Status != "deleted" {
+		t.Fatalf("incorrect completions: %+v", p.applications)
+	}
+}
+
+func (p *testPublisher) Publish(_ context.Context, kind string, pod *corev1.Pod, initial bool) error {
+	p.events = append(p.events, publishedEvent{kind, pod, initial})
+	return p.err
+}
+
+func TestPublisherIncludesExecutorsAndTombstones(t *testing.T) {
+	s := store.NewStore("", 0, 0)
+	defer s.Stop()
+	p := &testPublisher{err: errors.New("unavailable")}
+	h := NewPodEventHandler(s, WithPublisher(p))
+	driver := testutil.DriverPod("driver", "app", corev1.PodRunning, time.Now())
+	executor := testutil.ExecutorPod("executor", "app")
+	h.OnAdd(driver, true)
+	h.OnAdd(executor, false)
+	h.OnDelete(cache.DeletedFinalStateUnknown{Obj: executor})
+	h.OnDelete(driver)
+	h.OnAdd(testutil.PlainPod("web", nil, corev1.PodRunning), false)
+	h.OnDelete(testutil.PlainPod("web", nil, corev1.PodRunning))
+	h.OnUpdate(driver, driver.DeepCopy())
+	if len(p.events) != 4 {
+		t.Fatalf("published %d events", len(p.events))
+	}
+	if p.events[0].kind != "ADDED" || !p.events[0].initial || p.events[1].pod.Name != "executor" || p.events[1].initial || p.events[2].kind != "DELETED" || p.events[3].kind != "DELETED" {
+		t.Fatalf("incorrect events: %+v", p.events)
+	}
+	if pods := h.GetPodRecords(store.PodRecordFilter{Role: "executor", Status: "deleted"}); len(pods) != 1 {
+		t.Fatal("publisher failure must not prevent state updates")
+	}
+}
 
 func newTestHandler() *PodEventHandler {
 	return NewPodEventHandler(store.NewStore("", 0, 0))

@@ -1,5 +1,107 @@
 # podwatcher
 
+## cluster name and Elasticsearch events
+
+Configure the environment variable names and Elasticsearch connection in YAML:
+
+```yaml
+cluster:
+  nameEnv: CLUSTER_NAME
+elasticsearch:
+  address: https://elasticsearch.example:9200
+  username: podwatcher
+  passwordEnv: ES_PASSWORD
+  index: podwatcher-events
+```
+
+The cluster name is read once from `CLUSTER_NAME`; when `nameEnv` is empty,
+the existing ConfigMap lookup is used. When `nameEnv` is configured but its
+value is empty, a warning is logged and records have no cluster identity.
+The password is read only from the configured environment variable, never
+from YAML. An empty `address` disables Elasticsearch publishing. When enabled,
+an invalid address/index or a missing password for a configured username
+fails startup. Select your actual index name in `elasticsearch.index`.
+
+All adds and deletes passing the existing `spark-role=driver|executor` and
+`appSparkID` filter are written as separate ES documents. Startup snapshot
+adds are included as `ADDED` with `initial: true`; raw Pod updates are not exported.
+Documents contain `type`, `cluster`, `@timestamp`, `initial`, `metadata`,
+`status`, and `node`. The pod spec is omitted. The existing `/events` diagnostic
+API remains driver-only.
+
+Writes use HTTP Basic authentication and `PUT /<index>/_doc/<id>`. Document IDs
+are derived from cluster, Pod UID (or namespace/name), resourceVersion, event
+type and initial flag, so retrying/replaying the same event is idempotent.
+Transport failures, HTTP 429 and HTTP 5xx are retried up to three attempts.
+Each request times out after five seconds. Publishing is synchronous and can
+slow watch processing; after retries are exhausted, the error is logged and
+watch processing continues. There is no durable delivery queue: prolonged ES
+outages can lose exported events even though local state/checkpoints advance.
+
+For Helm/Kustomize deployments, set `config.cluster` and
+`config.elasticsearch` in your environment values and inject variables with
+`extraEnv`. Keep the ES password in an existing Kubernetes Secret:
+
+```yaml
+extraEnv:
+  - name: CLUSTER_NAME
+    value: dev-cluster
+  - name: ES_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: podwatcher-es
+        key: password
+```
+
+## completed applications in Elasticsearch
+
+The same configured index also receives application summaries with
+`type: APPLICATION_COMPLETED`. Driver success, failure or deletion completes
+an application; executor completion does not. Already completed drivers in
+the startup snapshot are also exported. Summary IDs depend on cluster,
+namespace and applicationId, so later observations update one summary rather
+than creating another record.
+
+```json
+{
+  "type": "APPLICATION_COMPLETED",
+  "cluster": "dev-cluster",
+  "@timestamp": "2026-10-07T10:00:05Z",
+  "indexedAt": "2026-10-07T10:00:05Z",
+  "finishedAt": "2026-10-07T10:00:00Z",
+  "application": {
+    "applicationId": "app-123",
+    "namespace": "default",
+    "status": "succeeded",
+    "finishedAt": "2026-10-07T10:00:00Z"
+  }
+}
+```
+
+`application` contains the full application view, including driver labels,
+creation/change times and any deletion time. Status lives under
+`application.status` to avoid a mapping conflict with the object-valued
+Pod event `status`. A driver deleted after success/failure retains that
+completion outcome in the ES summary. A driver deleted before a terminal
+phase has status `deleted`.
+
+`finishedAt` is the driver's container finish time when available, otherwise
+the first observation of its terminal state or deletion. It is retained on
+later updates and is also exposed by the existing application API.
+`indexedAt` and `@timestamp` record the current publishing attempt time;
+replays refresh these fields but preserve `finishedAt`.
+
+To discover newly received completion summaries, filter
+`type=APPLICATION_COMPLETED` and poll by `indexedAt`, using an overlapping
+time window and upserting by cluster/namespace/applicationId. Do not use
+only `finishedAt` as a strict discovery cursor: restart snapshots can arrive
+with historical finish times. Handle equal timestamps through pagination
+and overlap; ES refresh delays and write retries can delay visibility.
+The existing API also supports
+`/api/v1/applications?since=<changedAt>&status=succeeded,failed,deleted`.
+Completion publishing uses the same retry policy and delivery limitations
+as Pod events described above.
+
 ## build & push image
 
 ```bash

@@ -225,7 +225,7 @@ func (s *Store) upsertAppLocked(pod *corev1.Pod, appID string, deleted, bootstra
 				lifecycleChanged = true
 			}
 		}
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		if deleted || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			if rec.FinishedAt == nil {
 				finished := now
 				if _, containerFinished := containerTimes(pod); containerFinished != nil {

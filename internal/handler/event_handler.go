@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -32,14 +33,29 @@ type PodEventHandler struct {
 	eventsLock sync.RWMutex
 	maxEvents  int
 	stateStore *store.Store
+	publisher  EventPublisher
 }
 
-func NewPodEventHandler(stateStore *store.Store) *PodEventHandler {
-	return &PodEventHandler{
+type EventPublisher interface {
+	Publish(context.Context, string, *corev1.Pod, bool) error
+}
+
+type Option func(*PodEventHandler)
+
+func WithPublisher(publisher EventPublisher) Option {
+	return func(h *PodEventHandler) { h.publisher = publisher }
+}
+
+func NewPodEventHandler(stateStore *store.Store, opts ...Option) *PodEventHandler {
+	h := &PodEventHandler{
 		events:     make([]PodEvent, 0),
 		maxEvents:  1000,
 		stateStore: stateStore,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *PodEventHandler) OnAdd(obj interface{}, isInInitialList bool) {
@@ -60,6 +76,8 @@ func (h *PodEventHandler) OnAdd(obj interface{}, isInInitialList bool) {
 	} else {
 		h.stateStore.UpsertPod(pod, false)
 	}
+	h.publish("ADDED", pod, isInInitialList)
+	h.publishApplication(pod)
 
 	if role != "driver" {
 		return
@@ -99,6 +117,7 @@ func (h *PodEventHandler) OnUpdate(oldObj, newObj interface{}) {
 
 	// Keep the state current on every tracked pod change.
 	h.stateStore.UpsertPod(newPod, false)
+	h.publishApplication(newPod)
 
 	// The diagnostic stream records a driver lifecycle event only on the
 	// transition to a terminal phase (Succeeded/Failed) to avoid noise from
@@ -134,6 +153,8 @@ func (h *PodEventHandler) OnDelete(obj interface{}) {
 	}
 
 	h.stateStore.UpsertPod(pod, true)
+	h.publish("DELETED", pod, false)
+	h.publishApplication(pod)
 
 	if role != "driver" {
 		return
@@ -152,6 +173,40 @@ func (h *PodEventHandler) OnDelete(obj interface{}) {
 	h.addEvent(event)
 	klog.Infof("[POD DELETED] %s/%s phase=%s applicationId=%s labels=%v",
 		pod.Namespace, pod.Name, event.Phase, store.AppIDFromPod(pod), pod.Labels)
+}
+
+func (h *PodEventHandler) publish(eventType string, pod *corev1.Pod, initial bool) {
+	if h.publisher == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Second)
+	defer cancel()
+	if err := h.publisher.Publish(ctx, eventType, pod, initial); err != nil {
+		klog.Errorf("Failed to publish pod %s %s/%s to Elasticsearch: %v", eventType, pod.Namespace, pod.Name, err)
+	}
+}
+
+type ApplicationPublisher interface {
+	PublishApplication(context.Context, store.ApplicationView) error
+}
+
+func (h *PodEventHandler) publishApplication(pod *corev1.Pod) {
+	if store.SparkRole(pod) != "driver" {
+		return
+	}
+	publisher, ok := h.publisher.(ApplicationPublisher)
+	if !ok {
+		return
+	}
+	app, found := h.stateStore.GetApplication(store.AppIDFromPod(pod))
+	if !found || app.FinishedAt == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Second)
+	defer cancel()
+	if err := publisher.PublishApplication(ctx, app); err != nil {
+		klog.Errorf("Failed to publish completed application %s to Elasticsearch: %v", app.ApplicationID, err)
+	}
 }
 
 // podFromObject extracts a Pod from an event object, unwrapping a

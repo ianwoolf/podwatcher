@@ -25,19 +25,29 @@ type PodsConfig struct {
 	CheckpointFlushSecs int    `yaml:"checkpointFlushSeconds"` // resourceVersion checkpoint flush interval in seconds
 }
 
-// ClusterConfig identifies the ConfigMap that holds the local cluster
-// identity, which is stamped into every application and pod record.
+// ClusterConfig selects an environment variable or legacy ConfigMap for the
+// cluster identity stamped into application, pod and Elasticsearch records.
 type ClusterConfig struct {
+	NameEnv            string `yaml:"nameEnv"`            // environment variable holding the cluster name
 	ConfigMapName      string `yaml:"configMapName"`      // configmap holding the cluster identity
 	ConfigMapNamespace string `yaml:"configMapNamespace"` // namespace of the configmap; empty uses the pod namespace, then default
 	ConfigMapKey       string `yaml:"configMapKey"`       // key whose value is the cluster identity
 }
 
+// ElasticsearchConfig configures lifecycle event indexing. An empty address disables it.
+type ElasticsearchConfig struct {
+	Address     string `yaml:"address"`
+	Username    string `yaml:"username"`
+	PasswordEnv string `yaml:"passwordEnv"`
+	Index       string `yaml:"index"`
+}
+
 // Config is the application configuration.
 type Config struct {
-	Log     LogConfig     `yaml:"log"`
-	Pods    PodsConfig    `yaml:"pods"`
-	Cluster ClusterConfig `yaml:"cluster"`
+	Log           LogConfig           `yaml:"log"`
+	Pods          PodsConfig          `yaml:"pods"`
+	Cluster       ClusterConfig       `yaml:"cluster"`
+	Elasticsearch ElasticsearchConfig `yaml:"elasticsearch"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -59,6 +69,7 @@ func DefaultConfig() *Config {
 			ConfigMapName: "cluster-cm",
 			ConfigMapKey:  "currentCluster",
 		},
+		Elasticsearch: ElasticsearchConfig{PasswordEnv: "ES_PASSWORD", Index: "podwatcher-events"},
 	}
 }
 

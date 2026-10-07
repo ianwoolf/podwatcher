@@ -45,9 +45,11 @@ pods:
   # (env: PODWATCHER_CHECKPOINT_FLUSH_SECONDS).
   checkpointFlushSeconds: 10
 
-# cluster identity loaded from a ConfigMap and stamped into every
-# application and pod record. Read once at startup.
+# Cluster identity from nameEnv, or ConfigMap when nameEnv is empty.
+# Stamped into applications, pod records and ES events once at startup.
 cluster:
+  # Empty keeps legacy ConfigMap discovery.
+  nameEnv: "CLUSTER_NAME"
   # configmap name (env: PODWATCHER_CLUSTER_CM_NAME)
   configMapName: "cluster-cm"
   # namespace of the configmap. Empty uses the pod namespace via the
@@ -57,3 +59,10 @@ cluster:
   # key holding the cluster identity
   # (env: PODWATCHER_CLUSTER_CM_KEY)
   configMapKey: "currentCluster"
+
+elasticsearch:
+  # Empty disables ES publishing.
+  address: ""
+  username: ""
+  passwordEnv: "ES_PASSWORD"
+  index: "podwatcher-events"
