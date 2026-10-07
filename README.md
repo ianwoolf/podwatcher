@@ -24,10 +24,26 @@ fails startup. Select your actual index name in `elasticsearch.index`.
 
 All adds and deletes passing the existing `spark-role=driver|executor` and
 `appSparkID` filter are written as separate ES documents. Startup snapshot
-adds are included as `ADDED` with `initial: true`; raw Pod updates are not exported.
-Documents contain `type`, `cluster`, `@timestamp`, `initial`, `metadata`,
+adds are included as `ADDED` with `isInitialSnapshot: true`; raw Pod updates are not exported.
+Documents contain `type`, `cluster`, `@timestamp`, `isInitialSnapshot`, `metadata`,
 `status`, and `node`. The pod spec is omitted. The existing `/events` diagnostic
 API remains driver-only.
+
+Both Pod events and application summaries expose top-level `applicationId`,
+`podName`, and `queue` for queries and aggregations. Pod `applicationId` uses
+the existing `appSparkID` resolution; `podName` uses the Pod name. Summaries
+use the application's id and driver Pod name. `queue` comes from the Pod's
+`queue` label (driver labels for summaries); absent values are empty strings.
+Original metadata and application fields are retained.
+
+Both add and delete documents carry `addedAt` from the Pod's Kubernetes
+creation timestamp (omitted if unknown). Delete documents additionally carry
+`deletedAt`, the time podwatcher observes the deletion, including replay or
+relist reconciliation. It is not the actual historical deletion time or the
+Pod's `metadata.deletionTimestamp` (deletion request time). `@timestamp` is
+the publishing attempt time. `isInitialSnapshot` is a boolean source marker,
+not a timestamp. This replaces the earlier `initial` field for new writes;
+existing ES documents are not migrated.
 
 Writes use HTTP Basic authentication and `PUT /<index>/_doc/<id>`. Document IDs
 are derived from cluster, Pod UID (or namespace/name), resourceVersion, event
@@ -65,6 +81,9 @@ than creating another record.
 ```json
 {
   "type": "APPLICATION_COMPLETED",
+  "applicationId": "app-123",
+  "podName": "app-123-driver",
+  "queue": "root.default",
   "cluster": "dev-cluster",
   "@timestamp": "2026-10-07T10:00:05Z",
   "indexedAt": "2026-10-07T10:00:05Z",

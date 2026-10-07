@@ -48,6 +48,16 @@ extraEnv:
 
 ## Pod add/del 文档
 
+Pod 事件与完成应用汇总均增加三个顶层字段，便于统一查询统计：
+
+| 字段 | Pod add/del | 完成应用汇总 |
+| --- | --- | --- |
+| `applicationId` | 按现有规则读取 `appSparkID` label。 | 使用汇总的 `applicationId`。 |
+| `podName` | Pod 的 `metadata.name`。 | 应用的 driver Pod 名称。 |
+| `queue` | Pod 的 `queue` label。 | driver 的 `queue` label。 |
+
+字段始终输出；queue 标签不存在时为空字符串。保留原有嵌套 metadata/application 数据，现有过滤条件不变。只调整新写入文档，未回填已有 ES 数据。
+
 过滤条件保持为：`spark-role=driver|executor`，且 `appSparkID` 非空。其他 Pod 不发送。
 
 | 字段 | 含义 |
@@ -55,12 +65,18 @@ extraEnv:
 | `type` | `ADDED` 或 `DELETED`。 |
 | `cluster` | 集群名。 |
 | `@timestamp` | 本次发送开始时间，UTC。 |
-| `initial` | 是否来自启动 List 快照；快照写作 `ADDED`，并设置为 `true`。 |
+| `isInitialSnapshot` | 布尔标记，是否来自启动 List 快照；快照写作 `ADDED`，并设置为 `true`，不是时间。 |
+| `addedAt` | Pod 的 Kubernetes 创建时间，add 和 delete 文档均携带；创建时间未知时省略，不以观察时间替代。 |
+| `deletedAt` | 仅 delete 文档携带，表示 podwatcher 观察到删除事件的时间；回放或重新 List 对账时为本次观察时间。 |
 | `metadata` | Pod ObjectMeta，包含名称、namespace、UID、resourceVersion、labels 等。 |
 | `status` | PodStatus 对象。 |
 | `node` | Pod 所在节点。 |
 
 不导出 Pod spec。原有 `/events` 接口仍只保存 driver 诊断事件，原始 Pod MODIFIED 事件不写入 ES。
+
+`deletedAt` 不表示 Kubernetes 历史上实际删除的时刻，也不使用 `metadata.deletionTimestamp`（该字段表示请求删除的时间）。删除文档同时保留创建时间，便于后续分析生命周期。`@timestamp` 仍表示本次发送开始时间。
+
+此次将原先不够直观的 `initial` 字段改名为 `isInitialSnapshot`，仅改变新写入格式，未迁移 ES 中已经存在的旧文档。
 
 通过 `PUT /<index>/_doc/<id>` 写入。文档 ID 由集群、Pod UID（缺失时使用 namespace/name）、resourceVersion、事件类型和 initial 标记计算，重试与相同事件回放更新同一文档。
 
@@ -73,6 +89,9 @@ driver 进入 `Succeeded`、`Failed`，或被删除时，认为应用达到终�
 ```json
 {
   "type": "APPLICATION_COMPLETED",
+  "applicationId": "app-123",
+  "podName": "app-123-driver",
+  "queue": "root.default",
   "cluster": "cluster-a",
   "@timestamp": "2026-10-07T10:00:05Z",
   "indexedAt": "2026-10-07T10:00:05Z",

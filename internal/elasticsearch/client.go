@@ -24,13 +24,18 @@ import (
 // Event preserves pod metadata and status without exporting the pod spec,
 // which can contain environment credentials.
 type Event struct {
-	Type      string            `json:"type"`
-	Cluster   string            `json:"cluster"`
-	Timestamp time.Time         `json:"@timestamp"`
-	Initial   bool              `json:"initial"`
-	Metadata  metav1.ObjectMeta `json:"metadata"`
-	Status    corev1.PodStatus  `json:"status"`
-	Node      string            `json:"node"`
+	ApplicationID string            `json:"applicationId"`
+	PodName       string            `json:"podName"`
+	Queue         string            `json:"queue"`
+	Type          string            `json:"type"`
+	Cluster       string            `json:"cluster"`
+	Timestamp     time.Time         `json:"@timestamp"`
+	Initial       bool              `json:"isInitialSnapshot"`
+	AddedAt       *time.Time        `json:"addedAt,omitempty"`
+	DeletedAt     *time.Time        `json:"deletedAt,omitempty"`
+	Metadata      metav1.ObjectMeta `json:"metadata"`
+	Status        corev1.PodStatus  `json:"status"`
+	Node          string            `json:"node"`
 }
 
 type Client struct {
@@ -67,7 +72,16 @@ func (c *Client) Publish(ctx context.Context, eventType string, pod *corev1.Pod,
 	idBytes, _ := json.Marshal([]interface{}{c.cluster, identity, pod.ResourceVersion, eventType, initial})
 	hash := sha256.Sum256(idBytes)
 	id := hex.EncodeToString(hash[:])
-	body, err := json.Marshal(Event{Type: eventType, Cluster: c.cluster, Timestamp: time.Now().UTC(), Initial: initial, Metadata: pod.ObjectMeta, Status: pod.Status, Node: pod.Spec.NodeName})
+	now := time.Now().UTC()
+	event := Event{ApplicationID: store.AppIDFromPod(pod), PodName: pod.Name, Queue: pod.Labels["queue"], Type: eventType, Cluster: c.cluster, Timestamp: now, Initial: initial, Metadata: pod.ObjectMeta, Status: pod.Status, Node: pod.Spec.NodeName}
+	if !pod.CreationTimestamp.IsZero() {
+		addedAt := pod.CreationTimestamp.Time.UTC()
+		event.AddedAt = &addedAt
+	}
+	if eventType == "DELETED" {
+		event.DeletedAt = &now
+	}
+	body, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
@@ -77,12 +91,15 @@ func (c *Client) Publish(ctx context.Context, eventType string, pod *corev1.Pod,
 // Completion is distinct from Pod events and keeps status under application
 // to avoid conflicting with the existing object-valued status ES field.
 type Completion struct {
-	Type        string                `json:"type"`
-	Cluster     string                `json:"cluster"`
-	Timestamp   time.Time             `json:"@timestamp"`
-	IndexedAt   time.Time             `json:"indexedAt"`
-	FinishedAt  time.Time             `json:"finishedAt"`
-	Application store.ApplicationView `json:"application"`
+	ApplicationID string                `json:"applicationId"`
+	PodName       string                `json:"podName"`
+	Queue         string                `json:"queue"`
+	Type          string                `json:"type"`
+	Cluster       string                `json:"cluster"`
+	Timestamp     time.Time             `json:"@timestamp"`
+	IndexedAt     time.Time             `json:"indexedAt"`
+	FinishedAt    time.Time             `json:"finishedAt"`
+	Application   store.ApplicationView `json:"application"`
 }
 
 func (c *Client) PublishApplication(ctx context.Context, app store.ApplicationView) error {
@@ -100,7 +117,7 @@ func (c *Client) PublishApplication(ctx context.Context, app store.ApplicationVi
 	if app.DriverPhase == string(corev1.PodFailed) {
 		app.Status = "failed"
 	}
-	body, err := json.Marshal(Completion{Type: "APPLICATION_COMPLETED", Cluster: c.cluster, Timestamp: now, IndexedAt: now, FinishedAt: *app.FinishedAt, Application: app})
+	body, err := json.Marshal(Completion{ApplicationID: app.ApplicationID, PodName: app.DriverPodName, Queue: app.DriverLabels["queue"], Type: "APPLICATION_COMPLETED", Cluster: c.cluster, Timestamp: now, IndexedAt: now, FinishedAt: *app.FinishedAt, Application: app})
 	if err != nil {
 		return err
 	}

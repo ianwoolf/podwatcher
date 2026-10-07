@@ -14,7 +14,114 @@ import (
 	"podwatcher/internal/testutil"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestTopLevelQueryFields(t *testing.T) {
+	for _, queue := range []string{"root.default", ""} {
+		t.Run("queue="+queue, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var doc map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
+					t.Error(err)
+					return
+				}
+				for key, want := range map[string]string{"applicationId": "app-a", "podName": "driver", "queue": queue} {
+					var got string
+					if err := json.Unmarshal(doc[key], &got); err != nil || got != want {
+						t.Errorf("%s: got %q, want %q (err=%v)", key, got, want, err)
+					}
+				}
+				w.WriteHeader(http.StatusCreated)
+			}))
+			defer srv.Close()
+			c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events"}, "cluster")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pod := testutil.DriverPod("driver", "app-a", corev1.PodSucceeded, time.Now())
+			// Use the same canonical app id as the store even if another label differs.
+			pod.Labels["applicationId"] = "other-id"
+			if queue != "" {
+				pod.Labels["queue"] = queue
+			}
+			for _, kind := range []string{"ADDED", "DELETED"} {
+				if err := c.Publish(context.Background(), kind, pod, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			finished := time.Now()
+			app := store.ApplicationView{ApplicationRecord: store.ApplicationRecord{ApplicationID: "app-a", DriverPodName: "driver", FinishedAt: &finished}, DriverLabels: pod.Labels}
+			if err := c.PublishApplication(context.Background(), app); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 3 {
+				t.Fatalf("got %d documents", calls)
+			}
+		})
+	}
+}
+
+func TestPodEventLifecycleTimes(t *testing.T) {
+	created := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	deletionRequested := created.Add(time.Minute)
+	var events []Event
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["initial"]; exists {
+			t.Error("ambiguous initial field must not be exported")
+		}
+		if _, exists := body["isInitialSnapshot"]; !exists {
+			t.Error("snapshot marker missing")
+		}
+		data, _ := json.Marshal(body)
+		var event Event
+		if err := json.Unmarshal(data, &event); err != nil {
+			t.Error(err)
+		}
+		events = append(events, event)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events"}, "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := testutil.DriverPod("driver", "app", corev1.PodRunning, created)
+	pod.DeletionTimestamp = &metav1.Time{Time: deletionRequested}
+	before := time.Now().UTC()
+	if err := c.Publish(context.Background(), "ADDED", pod, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Publish(context.Background(), "DELETED", pod, false); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().UTC()
+	for _, event := range events {
+		if event.AddedAt == nil || !event.AddedAt.Equal(created) {
+			t.Errorf("creation time lost: %+v", event)
+		}
+	}
+	if !events[0].Initial || events[0].DeletedAt != nil {
+		t.Error("snapshot add must not carry deletion time")
+	}
+	deleted := events[1].DeletedAt
+	if deleted == nil || deleted.Before(before) || deleted.After(after) || deleted.Equal(deletionRequested) {
+		t.Errorf("deletion must use observation time: %v", deleted)
+	}
+	pod.CreationTimestamp = metav1.Time{}
+	if err := c.Publish(context.Background(), "ADDED", pod, false); err != nil {
+		t.Fatal(err)
+	}
+	if events[2].AddedAt != nil {
+		t.Error("unknown creation time must be omitted")
+	}
+}
 
 func TestPublishCompletedApplication(t *testing.T) {
 	finished := time.Now().Add(-time.Hour).UTC()
