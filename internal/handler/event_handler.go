@@ -179,9 +179,7 @@ func (h *PodEventHandler) publish(eventType string, pod *corev1.Pod, initial boo
 	if h.publisher == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Second)
-	defer cancel()
-	if err := h.publisher.Publish(ctx, eventType, pod, initial); err != nil {
+	if err := h.publisher.Publish(context.Background(), eventType, pod, initial); err != nil {
 		klog.Errorf("Failed to publish pod %s %s/%s to Elasticsearch: %v", eventType, pod.Namespace, pod.Name, err)
 	}
 }
@@ -202,9 +200,7 @@ func (h *PodEventHandler) publishApplication(pod *corev1.Pod) {
 	if !found || app.FinishedAt == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Second)
-	defer cancel()
-	if err := publisher.PublishApplication(ctx, app); err != nil {
+	if err := publisher.PublishApplication(context.Background(), app); err != nil {
 		klog.Errorf("Failed to publish completed application %s to Elasticsearch: %v", app.ApplicationID, err)
 	}
 }

@@ -61,6 +61,10 @@ cluster:
   configMapKey: "currentCluster"
 
 elasticsearch:
+  # Per-attempt timeout in seconds; retries may take up to three attempts.
+  timeoutSeconds: 20
+  # Set true to skip HTTPS certificate and hostname verification.
+  insecureSkipVerify: false
   # Empty disables ES publishing.
   address: ""
   username: ""

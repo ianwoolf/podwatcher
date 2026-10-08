@@ -36,10 +36,12 @@ type ClusterConfig struct {
 
 // ElasticsearchConfig configures lifecycle event indexing. An empty address disables it.
 type ElasticsearchConfig struct {
-	Address     string `yaml:"address"`
-	Username    string `yaml:"username"`
-	PasswordEnv string `yaml:"passwordEnv"`
-	Index       string `yaml:"index"`
+	TimeoutSeconds     int    `yaml:"timeoutSeconds"`
+	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
+	Address            string `yaml:"address"`
+	Username           string `yaml:"username"`
+	PasswordEnv        string `yaml:"passwordEnv"`
+	Index              string `yaml:"index"`
 }
 
 // Config is the application configuration.
@@ -69,7 +71,7 @@ func DefaultConfig() *Config {
 			ConfigMapName: "cluster-cm",
 			ConfigMapKey:  "currentCluster",
 		},
-		Elasticsearch: ElasticsearchConfig{PasswordEnv: "ES_PASSWORD", Index: "podwatcher-events"},
+		Elasticsearch: ElasticsearchConfig{PasswordEnv: "ES_PASSWORD", Index: "podwatcher-events", TimeoutSeconds: 20},
 	}
 }
 

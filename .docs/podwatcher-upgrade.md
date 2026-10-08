@@ -24,6 +24,8 @@ elasticsearch:
   username: podwatcher
   passwordEnv: ES_PASSWORD
   index: your-index
+  timeoutSeconds: 20
+  insecureSkipVerify: false
 ```
 
 - 集群名在启动时读取一次，去除两端空白。
@@ -161,8 +163,34 @@ GOCACHE=/tmp/podwatcher-upgrade-go-cache make test
 
 ## 当前限制
 
+### ES SDK（2026-10-08）
+
+已将手写 HTTP 请求替换为官方 Go ES SDK 的 Index API，固定依赖
+`github.com/elastic/go-elasticsearch/v8 v8.19.7`。通过 Go 模块代理查询
+`@latest`，确认这是本次检查时最新的 8.x 版本。
+
+启用 `EnableCompatibilityMode: true`，请求发送
+`Accept` / `Content-Type: application/vnd.elasticsearch+json;compatible-with=8`，
+用于连接目标 ES 9.5。相关官方说明：
+[REST API compatibility](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/compatibility)。
+
+关闭 SDK 内置重试，由原有发布逻辑保留三次尝试和每次请求超时，
+避免两层重试叠加。认证、索引配置、文档结构、时间字段和去重
+ID 规则保持一致。SDK 会校验成功响应的 `X-Elastic-Product: Elasticsearch`
+头；测试 HTTP 服务已模拟该响应头，并验证 8.x 兼容请求头。
+
+尚未连接真实 ES 9.5 做集成验证。
+
+### 超时与自签证书配置（2026-10-08）
+
+- `elasticsearch.timeoutSeconds`：每次请求超时，默认 20 秒；正数覆盖默认值，0 使用默认值，负数配置报错。
+- 去除 handler 原先固定的 16 秒总超时，防止截断配置的请求超时。默认三次尝试加退避最多约 60.6 秒，Pod 事件与应用汇总分别计时。
+- `elasticsearch.insecureSkipVerify`：默认 false；按需求设为 true 时，忽略 HTTPS 服务端证书链和主机名校验，无需 CA 文件。
+- TLS 配置只应用到 ES 专用 transport，不影响 Kubernetes 客户端或全局 HTTP transport。HTTPS 连接仍加密，但开启忽略校验后不验证服务端身份。
+- 测试覆盖默认值、YAML 配置覆盖、负数超时拒绝，以及自签 TLS 服务在默认配置下失败、开启忽略校验后成功。
+
 - ES 写入是同步操作，会增加 watch 处理耗时，启动快照较大时也会影响初始同步耗时。
-- 每个 HTTP 请求超时为 5 秒，每次发布上下文超时为 16 秒。网络错误、HTTP 429 和 5xx 最多尝试三次；其他非成功状态不重试。
+- 每个 HTTP 请求超时默认 20 秒，可配置。网络错误、HTTP 429 和 5xx 最多尝试三次；其他非成功状态不重试。
 - 重试耗尽后记录错误并继续处理，本地状态和 checkpoint 可以继续推进。
 - 没有持久化发送队列或故障恢复补发，持续 ES 故障期间可能丢失导出的 Pod 事件和应用汇总。
 - 固定文档 ID 用于去重，但汇总更新时间会刷新，订阅消费者必须支持重复 upsert。

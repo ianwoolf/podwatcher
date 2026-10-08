@@ -30,6 +30,8 @@ config:
     # Empty preserves ConfigMap discovery; set to the injected variable name.
     nameEnv: ""
   elasticsearch:
+    timeoutSeconds: 20
+    insecureSkipVerify: false
     address: ""
     username: ""
     passwordEnv: "ES_PASSWORD"

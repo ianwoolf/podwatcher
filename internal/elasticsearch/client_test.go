@@ -17,11 +17,50 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestTimeoutConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		seconds int
+		want    time.Duration
+	}{{0, 20 * time.Second}, {7, 7 * time.Second}} {
+		c, err := NewClient(config.ElasticsearchConfig{Address: "http://localhost:9200", Index: "events", TimeoutSeconds: tc.seconds}, "cluster")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.timeout != tc.want {
+			t.Fatalf("timeout=%v, want=%v", c.timeout, tc.want)
+		}
+	}
+	if _, err := NewClient(config.ElasticsearchConfig{Address: "http://localhost:9200", Index: "events", TimeoutSeconds: -1}, "cluster"); err == nil {
+		t.Fatal("negative timeout must fail")
+	}
+}
+
+func TestSelfSignedTLSVerificationSwitch(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	for _, skip := range []bool{false, true} {
+		c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events", InsecureSkipVerify: skip}, "cluster")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.Publish(context.Background(), "ADDED", testutil.ExecutorPod("executor", "app"), false)
+		if skip && err != nil {
+			t.Fatalf("self-signed TLS with skip enabled: %v", err)
+		}
+		if !skip && err == nil {
+			t.Fatal("default must reject untrusted certificate")
+		}
+	}
+}
+
 func TestTopLevelQueryFields(t *testing.T) {
 	for _, queue := range []string{"root.default", ""} {
 		t.Run("queue="+queue, func(t *testing.T) {
 			calls := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				var doc map[string]json.RawMessage
 				if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
@@ -68,7 +107,7 @@ func TestPodEventLifecycleTimes(t *testing.T) {
 	created := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 	deletionRequested := created.Add(time.Minute)
 	var events []Event
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
@@ -126,7 +165,7 @@ func TestPodEventLifecycleTimes(t *testing.T) {
 func TestPublishCompletedApplication(t *testing.T) {
 	finished := time.Now().Add(-time.Hour).UTC()
 	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		var doc Completion
 		if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
@@ -162,10 +201,15 @@ func TestPublishCompletedApplication(t *testing.T) {
 func TestPublishAuthenticationPayloadAndRetry(t *testing.T) {
 	t.Setenv("TEST_ES_PASSWORD", "test-secret")
 	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != "elastic" || pass != "test-secret" {
 			t.Error("incorrect auth")
+		}
+		for _, header := range []string{"Accept", "Content-Type"} {
+			if got := r.Header.Get(header); !strings.Contains(got, "compatible-with=8") {
+				t.Errorf("%s must request v8 compatibility, got %q", header, got)
+			}
 		}
 		if r.Method != http.MethodPut || !strings.HasPrefix(r.URL.Path, "/events/_doc/") {
 			t.Errorf("incorrect request %s %s", r.Method, r.URL.Path)
@@ -201,7 +245,7 @@ func TestPublishAuthenticationPayloadAndRetry(t *testing.T) {
 
 func TestPublishRejectsPermanentFailureWithoutRetry(t *testing.T) {
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte("sensitive response"))
@@ -234,7 +278,7 @@ func TestClientValidation(t *testing.T) {
 
 func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		var body map[string]json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -268,4 +312,11 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 	if paths[0] != paths[1] || paths[0] == paths[2] || paths[0] == paths[3] || paths[2] == paths[3] {
 		t.Fatalf("incorrect document IDs: %v", paths)
 	}
+}
+
+func newTestESServer(handler http.Handler) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		handler.ServeHTTP(w, r)
+	}))
 }

@@ -12,6 +12,8 @@ elasticsearch:
   username: podwatcher
   passwordEnv: ES_PASSWORD
   index: podwatcher-events
+  timeoutSeconds: 20
+  insecureSkipVerify: false
 ```
 
 The cluster name is read once from `CLUSTER_NAME`; when `nameEnv` is empty,
@@ -48,11 +50,26 @@ existing ES documents are not migrated.
 Writes use HTTP Basic authentication and `PUT /<index>/_doc/<id>`. Document IDs
 are derived from cluster, Pod UID (or namespace/name), resourceVersion, event
 type and initial flag, so retrying/replaying the same event is idempotent.
+The official Go SDK `github.com/elastic/go-elasticsearch/v8` is pinned to
+`v8.19.7` (latest 8.x checked on 2026-10-08). Writes use its Index API with
+`EnableCompatibilityMode: true`, sending `compatible-with=8` headers for
+Elasticsearch 9.x compatibility. SDK retries are disabled because the existing
+publishing loop owns retries and configurable per-attempt timeouts. SDK product
+verification expects `X-Elastic-Product: Elasticsearch` on successful responses.
 Transport failures, HTTP 429 and HTTP 5xx are retried up to three attempts.
-Each request times out after five seconds. Publishing is synchronous and can
+Each request defaults to a 20-second timeout (`timeoutSeconds` overrides it;
+zero uses the default, negative values are invalid). There is no separate
+16-second handler deadline. Up to three timed-out attempts plus backoff take
+approximately 60.6 seconds with the default setting. Publishing is synchronous and can
 slow watch processing; after retries are exhausted, the error is logged and
 watch processing continues. There is no durable delivery queue: prolonged ES
 outages can lose exported events even though local state/checkpoints advance.
+
+For a self-signed HTTPS endpoint, set `elasticsearch.insecureSkipVerify: true`
+to disable server certificate chain and hostname verification. It defaults to
+false; no CA certificate file is needed when enabled. HTTPS still encrypts the
+connection but the server's identity is not verified. This applies only to the
+ES client's transport, not the Kubernetes client or global HTTP transport.
 
 For Helm/Kustomize deployments, set `config.cluster` and
 `config.elasticsearch` in your environment values and inject variables with
