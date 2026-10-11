@@ -2,9 +2,11 @@ package elasticsearch
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +54,9 @@ func TestSelfSignedTLSVerificationSwitch(t *testing.T) {
 		}
 		if !skip && err == nil {
 			t.Fatal("default must reject untrusted certificate")
+		}
+		if !skip && !strings.Contains(err.Error(), "certificate") {
+			t.Fatalf("TLS diagnostic lost: %v", err)
 		}
 	}
 }
@@ -261,6 +266,73 @@ func TestPublishRejectsPermanentFailureWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestPublishErrorDetails(t *testing.T) {
+	t.Setenv("TEST_ES_PASSWORD", "test-secret")
+	for _, tc := range []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"mapping", `{"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [status]","caused_by":{"type":"illegal_argument_exception","reason":"expected object"},"root_cause":[{"type":"mapping_exception","reason":"conflicting field types"}],"stack_trace":"private-stack"}}`, []string{"mapper_parsing_exception", "failed to parse field [status]", "illegal_argument_exception", "expected object", "conflicting field types"}},
+		{"string", `{"error":"index is read-only"}`, []string{"index is read-only"}},
+		{"redaction", `{"error":{"type":"security_exception","reason":"test-secret Basic ` + base64.StdEncoding.EncodeToString([]byte("elastic:test-secret")) + `\naccess denied"},"request":"private-payload"}`, []string{"security_exception", "access denied", "[REDACTED]"}},
+		{"non-json", "private-payload", []string{"unavailable"}},
+		{"credentials", `{"error":"https://proxy:proxy-secret@example.com Bearer bearer-secret ApiKey api-secret"}`, []string{"[REDACTED]"}},
+		{"detail-limit", `{"error":{"reason":"` + strings.Repeat("x", 3000) + `"}}`, []string{"truncated"}},
+		{"long", `{"error":{"reason":"` + strings.Repeat("x", 20000) + `"}}`, []string{"truncated"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events", Username: "elastic", PasswordEnv: "TEST_ES_PASSWORD"}, "cluster")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.Publish(context.Background(), "ADDED", testutil.ExecutorPod("executor", "app"), false)
+			if err == nil {
+				t.Fatal("expected write error")
+			}
+			message := err.Error()
+			for _, want := range append(tc.want, "HTTP 400", "index=events", "attempt=1/3", `username="elastic"`, `password_env="TEST_ES_PASSWORD"`, "password_empty=false") {
+				if !strings.Contains(message, want) {
+					t.Errorf("missing %q: %s", want, message)
+				}
+			}
+			for _, secret := range []string{"test-secret", base64.StdEncoding.EncodeToString([]byte("elastic:test-secret")), "proxy-secret", "bearer-secret", "api-secret", "private-payload", "private-stack", "\n"} {
+				if strings.Contains(message, secret) {
+					t.Errorf("unsafe error detail: %q", message)
+				}
+			}
+			if len(message) > 4096 || calls != 1 {
+				t.Errorf("error size=%d, calls=%d", len(message), calls)
+			}
+		})
+	}
+}
+
+func TestPublishTransportErrorDetails(t *testing.T) {
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+	c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events"}, "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Publish(context.Background(), "ADDED", testutil.ExecutorPod("executor", "app"), false)
+	if err == nil {
+		t.Fatal("expected connection error")
+	}
+	for _, want := range []string{"connection refused", "index=events", "attempt=3/3", `username=""`, "password_empty=true"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q: %v", want, err)
+		}
+	}
+}
+
 func TestClientValidation(t *testing.T) {
 	t.Setenv("TEST_ES_MISSING", "")
 	for _, cfg := range []config.ElasticsearchConfig{
@@ -273,6 +345,35 @@ func TestClientValidation(t *testing.T) {
 		if _, err := NewClient(cfg, "cluster"); err == nil {
 			t.Error("expected invalid configuration to fail")
 		}
+	}
+}
+
+func TestPasswordValidationExplanation(t *testing.T) {
+	t.Setenv("TEST_ES_EMPTY", "")
+	t.Setenv("TEST_ES_UNSET", "temporary")
+	if err := os.Unsetenv("TEST_ES_UNSET"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"missing variable name", "", "set elasticsearch.passwordEnv to the environment variable name"},
+		{"unset variable", "TEST_ES_UNSET", "environment variable is not set"},
+		{"empty variable", "TEST_ES_EMPTY", "environment variable is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewClient(config.ElasticsearchConfig{Address: "http://localhost:9200", Index: "events", Username: "elastic", PasswordEnv: tc.env}, "cluster")
+			if err == nil {
+				t.Fatal("expected missing password error")
+			}
+			for _, want := range []string{tc.want, `username="elastic"`, "password_empty=true", "passwordEnv is a variable name, not the password"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("missing %q: %v", want, err)
+				}
+			}
+		})
 	}
 }
 

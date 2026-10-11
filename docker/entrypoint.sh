@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 # 日志轮转大小，默认 100M，可通过 LOG_MAX_SIZE 环境变量覆盖

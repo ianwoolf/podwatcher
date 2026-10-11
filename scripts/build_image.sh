@@ -34,7 +34,10 @@ fi
 FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 
 echo "Building ${FULL_IMAGE}..."
-docker build -t "$FULL_IMAGE" -f "$PROJECT_DIR/docker/Dockerfile" "$PROJECT_DIR"
+docker build --platform linux/amd64 \
+-t "$FULL_IMAGE"  \
+-f "$PROJECT_DIR/docker/Dockerfile"  \
+"$PROJECT_DIR"
 
 echo "Built: ${FULL_IMAGE}"
 

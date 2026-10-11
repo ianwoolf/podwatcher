@@ -68,5 +68,7 @@ elasticsearch:
   # Empty disables ES publishing.
   address: ""
   username: ""
+  # Environment variable NAME, not the password itself. When username is set,
+  # this variable must exist in the container and contain a non-empty password.
   passwordEnv: "ES_PASSWORD"
   index: "podwatcher-events"

@@ -5,13 +5,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,10 +45,12 @@ type Event struct {
 }
 
 type Client struct {
-	timeout time.Duration
-	sdk     *es.Client
-	index   string
-	cluster string
+	timeout  time.Duration
+	sdk      *es.Client
+	index    string
+	cluster  string
+	redact   *strings.Replacer
+	authInfo string
 }
 
 func NewClient(cfg config.ElasticsearchConfig, cluster string) (*Client, error) {
@@ -55,9 +61,16 @@ func NewClient(cfg config.ElasticsearchConfig, cluster string) (*Client, error) 
 	if cfg.Index == "" || strings.ContainsAny(cfg.Index, "/\\ *?\"<>|,#:") || strings.ToLower(cfg.Index) != cfg.Index || strings.HasPrefix(cfg.Index, "_") || strings.HasPrefix(cfg.Index, "-") || strings.HasPrefix(cfg.Index, "+") || cfg.Index == "." || cfg.Index == ".." {
 		return nil, fmt.Errorf("invalid elasticsearch.index")
 	}
-	password := os.Getenv(cfg.PasswordEnv)
+	password, passwordSet := os.LookupEnv(cfg.PasswordEnv)
+	authInfo := fmt.Sprintf("username=%q password_env=%q password_empty=%t", cfg.Username, cfg.PasswordEnv, password == "")
 	if cfg.Username != "" && (cfg.PasswordEnv == "" || password == "") {
-		return nil, fmt.Errorf("elasticsearch password environment variable %q is empty", cfg.PasswordEnv)
+		reason := "environment variable is empty"
+		if cfg.PasswordEnv == "" {
+			reason = "set elasticsearch.passwordEnv to the environment variable name"
+		} else if !passwordSet {
+			reason = "environment variable is not set"
+		}
+		return nil, fmt.Errorf("Elasticsearch authentication configuration invalid (%s): %s; inject a non-empty password into the container environment; passwordEnv is a variable name, not the password", authInfo, reason)
 	}
 	if cfg.TimeoutSeconds < 0 || int64(cfg.TimeoutSeconds) > int64((1<<63-1)/time.Second) {
 		return nil, fmt.Errorf("invalid elasticsearch.timeoutSeconds: use positive seconds")
@@ -77,9 +90,19 @@ func NewClient(cfg config.ElasticsearchConfig, cluster string) (*Client, error) 
 		DisableRetry: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize Elasticsearch SDK")
+		return nil, fmt.Errorf("failed to initialize Elasticsearch SDK (%s)", authInfo)
 	}
-	return &Client{sdk: sdk, index: cfg.Index, cluster: cluster, timeout: time.Duration(cfg.TimeoutSeconds) * time.Second}, nil
+	var replacements []string
+	if password != "" {
+		for _, secret := range []string{base64.StdEncoding.EncodeToString([]byte(cfg.Username + ":" + password)), password, url.QueryEscape(password), url.PathEscape(password)} {
+			replacements = append(replacements, secret, "[REDACTED]")
+		}
+	}
+	return &Client{
+		sdk: sdk, index: cfg.Index, cluster: cluster,
+		timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
+		redact:  strings.NewReplacer(replacements...), authInfo: authInfo,
+	}, nil
 }
 
 // Publish uses a stable id so retries and watch replays overwrite the same event.
@@ -144,8 +167,12 @@ func (c *Client) PublishApplication(ctx context.Context, app store.ApplicationVi
 	return c.write(ctx, hex.EncodeToString(hash[:]), body)
 }
 
-func (c *Client) write(ctx context.Context, id string, body []byte) error {
-	var err error
+func (c *Client) write(ctx context.Context, id string, body []byte) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%w (%s)", err, c.authInfo)
+		}
+	}()
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			select {
@@ -158,20 +185,103 @@ func (c *Client) write(ctx context.Context, id string, body []byte) error {
 		resp, requestErr := c.sdk.Index(c.index, bytes.NewReader(body), c.sdk.Index.WithDocumentID(id), c.sdk.Index.WithContext(attemptCtx))
 		if requestErr != nil {
 			cancel()
-			// Do not log transport errors: they may contain connection credentials.
-			err = fmt.Errorf("Elasticsearch request failed")
+			// Strip request URLs (which may contain credentials or query tokens),
+			// while retaining DNS, connection, TLS and timeout diagnostics.
+			var urlErr *url.Error
+			if errors.As(requestErr, &urlErr) {
+				requestErr = urlErr.Err
+			}
+			err = fmt.Errorf("Elasticsearch request failed (index=%s attempt=%d/3): %s", c.index, attempt+1, c.safeDetail(requestErr.Error()))
 			continue
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
 		resp.Body.Close()
 		cancel()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
-		err = fmt.Errorf("Elasticsearch returned HTTP %d", resp.StatusCode)
+		detail := responseErrorDetail(responseBody)
+		if readErr != nil {
+			detail += "; reading error response: " + readErr.Error()
+		}
+		err = fmt.Errorf("Elasticsearch returned HTTP %d (index=%s attempt=%d/3): %s", resp.StatusCode, c.index, attempt+1, c.safeDetail(detail))
 		if resp.StatusCode != 429 && resp.StatusCode < 500 {
 			return err
 		}
 	}
 	return err
+}
+
+const maxErrorBody = 16 * 1024
+
+// Only extract diagnostic fields, never the entire response, headers or document.
+func responseErrorDetail(body []byte) string {
+	if len(body) > maxErrorBody {
+		return "error details unavailable (response truncated)"
+	}
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || len(envelope.Error) == 0 {
+		return "error details unavailable (empty or non-ES JSON response)"
+	}
+	detail := describeESError(envelope.Error, 0)
+	if detail == "" {
+		return "error details unavailable"
+	}
+	return detail
+}
+
+func describeESError(raw json.RawMessage, depth int) string {
+	if depth >= 4 {
+		return "nested error truncated"
+	}
+	var message string
+	if json.Unmarshal(raw, &message) == nil {
+		return message
+	}
+	var detail struct {
+		Type      string            `json:"type"`
+		Reason    string            `json:"reason"`
+		RootCause []json.RawMessage `json:"root_cause"`
+		CausedBy  json.RawMessage   `json:"caused_by"`
+	}
+	if json.Unmarshal(raw, &detail) != nil {
+		return ""
+	}
+	var parts []string
+	if detail.Type != "" {
+		parts = append(parts, "type="+detail.Type)
+	}
+	if detail.Reason != "" {
+		parts = append(parts, "reason="+detail.Reason)
+	}
+	for _, root := range detail.RootCause {
+		if value := describeESError(root, depth+1); value != "" {
+			parts = append(parts, "root_cause={"+value+"}")
+		}
+	}
+	if len(detail.CausedBy) > 0 {
+		if value := describeESError(detail.CausedBy, depth+1); value != "" {
+			parts = append(parts, "caused_by={"+value+"}")
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+var (
+	urlCredentials  = regexp.MustCompile(`(?i)(https?://)[^\s/@]+@`)
+	authCredentials = regexp.MustCompile(`(?i)\b(Basic|Bearer|ApiKey)\s+[^\s,;"']+`)
+)
+
+func (c *Client) safeDetail(detail string) string {
+	detail = urlCredentials.ReplaceAllString(detail, "${1}[REDACTED]@")
+	detail = authCredentials.ReplaceAllString(detail, "${1} [REDACTED]")
+	detail = c.redact.Replace(detail)
+	// Escape control characters to keep external messages on one log line.
+	detail = strconv.QuoteToASCII(detail)
+	if len(detail) > 2048 {
+		detail = detail[:2048] + "... [truncated]"
+	}
+	return detail
 }
