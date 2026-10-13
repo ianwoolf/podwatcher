@@ -26,7 +26,21 @@ func TestLoadClusterAndElasticsearch(t *testing.T) {
 
 func TestElasticsearchDefaults(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Elasticsearch.TimeoutSeconds != 20 || cfg.Elasticsearch.InsecureSkipVerify {
+	if cfg.Elasticsearch.TimeoutSeconds != 20 || cfg.Elasticsearch.InsecureSkipVerify || cfg.Elasticsearch.IsDebug {
 		t.Fatal("expected 20s timeout and certificate verification by default")
+	}
+}
+
+func TestLoadElasticsearchDebugPayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("elasticsearch:\n  isDebug: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Elasticsearch.IsDebug {
+		t.Fatal("isDebug must load from YAML")
 	}
 }

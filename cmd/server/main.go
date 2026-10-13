@@ -54,6 +54,11 @@ func main() {
 	}
 
 	setupKlog(cfg)
+	if configPath == "" {
+		klog.Info("Configuration loaded from defaults and environment overrides; no config file specified")
+	} else {
+		klog.Infof("Configuration loaded from %s", configPath)
+	}
 
 	defer klog.Flush()
 
@@ -87,7 +92,10 @@ func main() {
 		if err != nil {
 			klog.Fatalf("Failed to configure Elasticsearch: %v", err)
 		}
-		handlerOptions = append(handlerOptions, handler.WithPublisher(publisher))
+		handlerOptions = append(handlerOptions, handler.WithPublisher(publisher), handler.WithDebug(cfg.Elasticsearch.IsDebug))
+		klog.Infof("Elasticsearch publishing enabled: index=%s timeoutSeconds=%d isDebug=%t insecureSkipVerify=%t", cfg.Elasticsearch.Index, cfg.Elasticsearch.TimeoutSeconds, cfg.Elasticsearch.IsDebug, cfg.Elasticsearch.InsecureSkipVerify)
+	} else {
+		klog.Warning("Elasticsearch publishing disabled: elasticsearch.address is empty; check the loaded config file")
 	}
 	eventHandler := handler.NewPodEventHandler(stateStore, handlerOptions...)
 
