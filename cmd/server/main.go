@@ -65,6 +65,12 @@ func main() {
 
 	clusterName := loadClusterIdentity(k8sClient, cfg.Cluster)
 
+	// Prometheus config overrides depend on cluster identity:
+	// PROMETHEUS_ADDRESS_<cluster> / PROMETHEUS_TOKEN_<cluster> take precedence,
+	// falling back to the unprefixed PROMETHEUS_ADDRESS / PROMETHEUS_TOKEN.
+	cfg.Prometheus.Address = envByCluster("PROMETHEUS_ADDRESS", clusterName, cfg.Prometheus.Address)
+	cfg.Prometheus.Token = envByCluster("PROMETHEUS_TOKEN", clusterName, cfg.Prometheus.Token)
+
 	stateStore := store.NewStore(cfg.Pods.StateFile, cfg.Pods.MaxApplications, cfg.Pods.MaxPodRecords, store.WithCluster(clusterName))
 	// One-time migration from the pre-single-file layout: only when no state
 	// snapshot exists yet, read the legacy sibling files if present.
@@ -100,9 +106,7 @@ func main() {
 	// is reported to gateway requests instead of failing startup.
 	promGateway := controller.NewPrometheusGateway(prometheus.NewClient(prometheus.Config{
 		Address:            cfg.Prometheus.Address,
-		TokenEnv:           cfg.Prometheus.TokenEnv,
-		Username:           cfg.Prometheus.Username,
-		PasswordEnv:        cfg.Prometheus.PasswordEnv,
+		Token:              cfg.Prometheus.Token,
 		TimeoutSeconds:     cfg.Prometheus.TimeoutSeconds,
 		InsecureSkipVerify: cfg.Prometheus.InsecureSkipVerify,
 	}))
@@ -269,4 +273,21 @@ func setupKlog(cfg *config.Config) {
 	}
 
 	klog.InfoS("Klog configured", "logFile", logCfg.File, "maxSizeMB", logCfg.MaxSize)
+}
+
+// envByCluster resolves a value from environment variables with cluster-aware
+// key selection. It first tries <base>_<upper-cluster> (e.g. PROMETHEUS_ADDRESS_UAT1),
+// then falls back to <base> (e.g. PROMETHEUS_ADDRESS), then the provided fallback.
+// An empty cluster name skips the cluster-specific lookup.
+func envByCluster(base, cluster, fallback string) string {
+	if cluster != "" {
+		key := base + "_" + strings.ToUpper(cluster)
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	if v := os.Getenv(base); v != "" {
+		return v
+	}
+	return fallback
 }

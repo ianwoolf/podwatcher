@@ -44,14 +44,14 @@ type ElasticsearchConfig struct {
 	Index              string `yaml:"index"`
 }
 
-// PrometheusConfig configures the Prometheus gateway. An empty address disables it.
+// PrometheusConfig configures the Prometheus gateway. Address comes from YAML
+// or PODWATCHER_PROMETHEUS_ADDRESS; the bearer token comes from
+// PODWATCHER_PROMETHEUS_TOKEN.
 type PrometheusConfig struct {
 	TimeoutSeconds     int    `yaml:"timeoutSeconds"`
 	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
 	Address            string `yaml:"address"`
-	TokenEnv           string `yaml:"tokenEnv"`
-	Username           string `yaml:"username"`
-	PasswordEnv        string `yaml:"passwordEnv"`
+	Token              string `yaml:"token"`
 }
 
 // Config is the application configuration.
@@ -83,7 +83,7 @@ func DefaultConfig() *Config {
 			ConfigMapKey:  "currentCluster",
 		},
 		Elasticsearch: ElasticsearchConfig{PasswordEnv: "ES_PASSWORD", Index: "podwatcher-events", TimeoutSeconds: 20},
-		Prometheus:    PrometheusConfig{TokenEnv: "PROMETHEUS_TOKEN", TimeoutSeconds: 20},
+		Prometheus:    PrometheusConfig{TimeoutSeconds: 20},
 	}
 }
 
@@ -149,13 +149,6 @@ func Load(configPath string) (*Config, error) {
 	}
 	if v := os.Getenv("PODWATCHER_CLUSTER_CM_KEY"); v != "" {
 		cfg.Cluster.ConfigMapKey = v
-	}
-
-	if v := os.Getenv("PODWATCHER_PROMETHEUS_ADDRESS"); v != "" {
-		cfg.Prometheus.Address = v
-	}
-	if v := os.Getenv("PODWATCHER_PROMETHEUS_TOKEN_ENV"); v != "" {
-		cfg.Prometheus.TokenEnv = v
 	}
 
 	return cfg, nil

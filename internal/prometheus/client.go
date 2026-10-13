@@ -3,28 +3,24 @@ package prometheus
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Config configures the Prometheus HTTP API client. An empty address disables it.
-// Authentication is bearer-token based via TokenEnv, read from the environment.
-// Basic auth (Username + PasswordEnv) is also accepted for flexibility.
+// Config configures the Prometheus HTTP API client. Address and Token are
+// expected to be fully resolved by the caller — the client does not read
+// environment variables itself.
 type Config struct {
 	Address            string `yaml:"address"`            // Prometheus base URL, e.g. http://prometheus:9090
-	TokenEnv           string `yaml:"tokenEnv"`           // environment variable name holding the bearer token
-	Username           string `yaml:"username"`           // optional basic auth username
-	PasswordEnv        string `yaml:"passwordEnv"`        // optional environment variable name holding the basic auth password
+	Token              string `yaml:"token"`              // resolved bearer token
 	TimeoutSeconds     int    `yaml:"timeoutSeconds"`     // per-request timeout in seconds
 	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"` // skip TLS verification for self-signed endpoints
 }
@@ -83,42 +79,39 @@ type Client struct {
 	timeout    time.Duration
 	base       string
 	token      string
-	username   string
-	password   string
 	authInfo   string
 	redact     *strings.Replacer
 	httpClient *http.Client
 }
 
-// NewClient builds a Prometheus API client. Empty or partial configuration
-// is accepted — request-time failures surface misconfiguration to the caller.
+// NewClient builds a Prometheus API client. Address and Token must be fully
+// resolved by the caller — this function does not read the environment.
 func NewClient(cfg Config) *Client {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
-	token, _ := os.LookupEnv(cfg.TokenEnv)
-	password, _ := os.LookupEnv(cfg.PasswordEnv)
+	token := cfg.Token
 	var replacements []string
 	if token != "" {
 		for _, secret := range []string{token, "Bearer " + token, url.QueryEscape(token), url.PathEscape(token)} {
 			replacements = append(replacements, secret, "[REDACTED]")
 		}
 	}
-	if password != "" {
-		for _, secret := range []string{base64.StdEncoding.EncodeToString([]byte(cfg.Username + ":" + password)), password, url.QueryEscape(password), url.PathEscape(password)} {
-			replacements = append(replacements, secret, "[REDACTED]")
-		}
-	}
+	// Dedicated transport with explicit connection pool sizing; defaults from
+	// http.DefaultTransport leave MaxIdleConnsPerHost at 2 which starves
+	// concurrent gateway requests.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 32
+	transport.MaxConnsPerHost = 64
+	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify}
 	return &Client{
 		timeout:    timeout,
 		base:       strings.TrimRight(cfg.Address, "/"),
 		token:      token,
-		username:   cfg.Username,
-		password:   password,
-		authInfo:   fmt.Sprintf("token_env=%q username=%q password_env=%q", cfg.TokenEnv, cfg.Username, cfg.PasswordEnv),
+		authInfo:   fmt.Sprintf("token_set=%t", token != ""),
 		redact:     strings.NewReplacer(replacements...),
 		httpClient: &http.Client{Transport: transport},
 	}
@@ -193,15 +186,10 @@ func (c *Client) request(ctx context.Context, path string, values url.Values, at
 	if err != nil {
 		return false, fmt.Errorf("build Prometheus request (path=%s attempt=%d/3): %s", path, attempt+1, c.safeDetail(err.Error()))
 	}
-	// Bearer token takes priority when both forms are configured: set basic
-	// auth first, then let the token overwrite the Authorization header.
-	if c.username != "" {
-		req.SetBasicAuth(c.username, c.password)
-	}
+	req.Header.Set("Accept", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	req.Header.Set("Accept", "application/json")
 	resp, requestErr := c.httpClient.Do(req)
 	if requestErr != nil {
 		// Strip request URLs (which may contain credentials or query tokens),
@@ -213,10 +201,16 @@ func (c *Client) request(ctx context.Context, path string, values url.Values, at
 		return true, fmt.Errorf("Prometheus request failed (path=%s attempt=%d/3): %s", path, attempt+1, c.safeDetail(requestErr.Error()))
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// Success responses can be large (many series × many data points).
+		// Cap at maxSuccessBody to protect memory; legitimate query_range
+		// responses fit well under this with sane step/interval.
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSuccessBody+1))
 		if readErr != nil {
 			return false, fmt.Errorf("read Prometheus response (path=%s attempt=%d/3): %s", path, attempt+1, readErr.Error())
+		}
+		if len(body) > maxSuccessBody {
+			return false, fmt.Errorf("Prometheus response too large (path=%s attempt=%d/3): exceeds %d bytes; narrow the query, shorten the range, or increase the step", path, attempt+1, maxSuccessBody)
 		}
 		var response Response
 		if jsonErr := json.Unmarshal(body, &response); jsonErr != nil {
@@ -228,6 +222,8 @@ func (c *Client) request(ctx context.Context, path string, values url.Values, at
 		*out = response.Data.Result
 		return false, nil
 	}
+	// Error responses are typically small — cap the body to avoid log spam.
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
 	detail := c.safeDetail(string(body))
 	if readErr != nil {
 		detail += "; reading error response: " + readErr.Error()
@@ -236,7 +232,10 @@ func (c *Client) request(ctx context.Context, path string, values url.Values, at
 	return resp.StatusCode == 429 || resp.StatusCode >= 500, err
 }
 
-const maxErrorBody = 16 * 1024
+const (
+	maxErrorBody   = 16 * 1024
+	maxSuccessBody = 64 * 1024 * 1024 // 64MB — protects memory from pathological query_range responses
+)
 
 var (
 	urlCredentials  = regexp.MustCompile(`(?i)(https?://)[^\s/@]+@`)
