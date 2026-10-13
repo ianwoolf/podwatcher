@@ -36,6 +36,7 @@ type ClusterConfig struct {
 
 // ElasticsearchConfig configures lifecycle event indexing. An empty address disables it.
 type ElasticsearchConfig struct {
+	IsDebug            bool   `yaml:"isDebug"`
 	TimeoutSeconds     int    `yaml:"timeoutSeconds"`
 	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
 	Address            string `yaml:"address"`

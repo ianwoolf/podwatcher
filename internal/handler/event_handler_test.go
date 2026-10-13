@@ -105,6 +105,28 @@ func TestPublisherIncludesExecutorsAndTombstones(t *testing.T) {
 	}
 }
 
+type debugPayloadError struct{ reads int }
+
+func (e *debugPayloadError) Error() string        { return "publish failed" }
+func (e *debugPayloadError) DebugPayload() string { e.reads++; return `{"podName":"test-pod"}` }
+
+func TestDebugPayloadConfiguration(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s := store.NewStore("", 0, 0)
+		h := NewPodEventHandler(s, WithDebug(enabled))
+		err := &debugPayloadError{}
+		h.logPublishPayload(err)
+		s.Stop()
+		want := 0
+		if enabled {
+			want = 1
+		}
+		if err.reads != want {
+			t.Errorf("enabled=%v: payload reads=%d, want=%d", enabled, err.reads, want)
+		}
+	}
+}
+
 func newTestHandler() *PodEventHandler {
 	return NewPodEventHandler(store.NewStore("", 0, 0))
 }

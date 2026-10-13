@@ -1,2 +1,3 @@
 bin/**
 kustomize/overlays/*/rendered.yaml
+.test

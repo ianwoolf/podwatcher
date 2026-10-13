@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ type PodEventHandler struct {
 	maxEvents  int
 	stateStore *store.Store
 	publisher  EventPublisher
+	isDebug    bool
 }
 
 type EventPublisher interface {
@@ -44,6 +46,10 @@ type Option func(*PodEventHandler)
 
 func WithPublisher(publisher EventPublisher) Option {
 	return func(h *PodEventHandler) { h.publisher = publisher }
+}
+
+func WithDebug(enabled bool) Option {
+	return func(h *PodEventHandler) { h.isDebug = enabled }
 }
 
 func NewPodEventHandler(stateStore *store.Store, opts ...Option) *PodEventHandler {
@@ -179,8 +185,14 @@ func (h *PodEventHandler) publish(eventType string, pod *corev1.Pod, initial boo
 	if h.publisher == nil {
 		return
 	}
+	if h.isDebug {
+		klog.Infof("[DEBUG] Elasticsearch publishing pod %s %s/%s initial=%t", eventType, pod.Namespace, pod.Name, initial)
+	}
 	if err := h.publisher.Publish(context.Background(), eventType, pod, initial); err != nil {
 		klog.Errorf("Failed to publish pod %s %s/%s to Elasticsearch: %v", eventType, pod.Namespace, pod.Name, err)
+		h.logPublishPayload(err)
+	} else if h.isDebug {
+		klog.Infof("[DEBUG] Elasticsearch published pod %s %s/%s", eventType, pod.Namespace, pod.Name)
 	}
 }
 
@@ -200,8 +212,24 @@ func (h *PodEventHandler) publishApplication(pod *corev1.Pod) {
 	if !found || app.FinishedAt == nil {
 		return
 	}
+	if h.isDebug {
+		klog.Infof("[DEBUG] Elasticsearch publishing completed application %s", app.ApplicationID)
+	}
 	if err := publisher.PublishApplication(context.Background(), app); err != nil {
 		klog.Errorf("Failed to publish completed application %s to Elasticsearch: %v", app.ApplicationID, err)
+		h.logPublishPayload(err)
+	} else if h.isDebug {
+		klog.Infof("[DEBUG] Elasticsearch published completed application %s", app.ApplicationID)
+	}
+}
+
+func (h *PodEventHandler) logPublishPayload(err error) {
+	if !h.isDebug {
+		return
+	}
+	var detail interface{ DebugPayload() string }
+	if errors.As(err, &detail) {
+		klog.Infof("[DEBUG] Elasticsearch failed document JSON: %s", detail.DebugPayload())
 	}
 }
 
