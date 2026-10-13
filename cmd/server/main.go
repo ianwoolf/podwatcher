@@ -18,6 +18,7 @@ import (
 	"podwatcher/internal/elasticsearch"
 	"podwatcher/internal/handler"
 	"podwatcher/internal/informer"
+	"podwatcher/internal/prometheus"
 	"podwatcher/internal/service"
 	"podwatcher/internal/store"
 	"podwatcher/pkg/k8s"
@@ -95,7 +96,23 @@ func main() {
 	podService := service.NewPodService(k8sClient, eventHandler)
 	podController := controller.NewPodController(podService)
 
-	router := setupRouter(podController)
+	// The Prometheus gateway is always registered; an incomplete configuration
+	// is reported to gateway requests instead of failing startup.
+	promGateway := controller.NewPrometheusGateway(prometheus.NewClient(prometheus.Config{
+		Address:            cfg.Prometheus.Address,
+		TokenEnv:           cfg.Prometheus.TokenEnv,
+		Username:           cfg.Prometheus.Username,
+		PasswordEnv:        cfg.Prometheus.PasswordEnv,
+		TimeoutSeconds:     cfg.Prometheus.TimeoutSeconds,
+		InsecureSkipVerify: cfg.Prometheus.InsecureSkipVerify,
+	}))
+	if cfg.Prometheus.Address == "" {
+		klog.Warning("Prometheus gateway is not configured (prometheus.address is empty); /api/v1/prometheus/query_range requests will fail")
+	} else {
+		klog.Infof("Prometheus gateway enabled (address=%s)", cfg.Prometheus.Address)
+	}
+
+	router := setupRouter(podController, promGateway)
 
 	srv := &http.Server{
 		Addr:    ":" + *port,
@@ -178,7 +195,7 @@ func loadClusterIdentity(k8sClient *k8s.Client, cfg config.ClusterConfig) string
 	return cluster
 }
 
-func setupRouter(podController *controller.PodController) *gin.Engine {
+func setupRouter(podController *controller.PodController, promGateway *controller.PrometheusGateway) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.Default()
@@ -201,6 +218,8 @@ func setupRouter(podController *controller.PodController) *gin.Engine {
 		api.GET("/applications/:applicationId", podController.GetApplication)
 
 		api.GET("/pod-records", podController.ListPodRecords)
+
+		api.GET("/prometheus/query_range", promGateway.QueryRange)
 	}
 
 	router.GET("/", func(c *gin.Context) {
@@ -216,6 +235,7 @@ func setupRouter(podController *controller.PodController) *gin.Engine {
 				"GET  /api/v1/applications?since=<RFC3339>&limit=&applicationId=&status=<csv>",
 				"GET  /api/v1/applications/:applicationId",
 				"GET  /api/v1/pod-records?applicationId=&role=&node=&status=&startTime=&endTime=&limit=",
+				"GET  /api/v1/prometheus/query_range?query=&start=&end=&step=",
 			},
 		})
 	})
