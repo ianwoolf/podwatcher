@@ -36,6 +36,13 @@ config:
     username: ""
     passwordEnv: "ES_PASSWORD"
     index: "podwatcher-events"
+  prometheus:
+    timeoutSeconds: 20
+    insecureSkipVerify: true
+    address: "http://127.0.0.1:9090" # replace by environment variable
+    tokenEnv: "PROMETHEUS_TOKEN" # replace by environment variable
+    username: "mock"
+    passwordEnv: "mock"
   log:
     file: "/var/log/podwatcher/podwatcher.log"
     maxSize: 100

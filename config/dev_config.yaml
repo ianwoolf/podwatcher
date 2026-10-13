@@ -1,0 +1,28 @@
+cluster:
+    # Empty preserves ConfigMap discovery; set to the injected variable name.
+  nameEnv: ""
+elasticsearch:
+  timeoutSeconds: 20
+  insecureSkipVerify: false
+  address: ""
+  username: ""
+  passwordEnv: "ES_PASSWORD"
+  index: "podwatcher-events"
+prometheus:
+  timeoutSeconds: 20
+  insecureSkipVerify: true
+  address: "http://localhost:9090"
+  token: ""
+log:
+  file: "/var/log/podwatcher/podwatcher.log"
+  maxSize: 100
+  maxNum: 5
+pods:
+  resumeFile: "/var/log/podwatcher/pods-resume.json"
+  stateFile: "/var/log/podwatcher/state.json"
+  maxApplications: 5000
+  maxPodRecords: 10000
+    # downstream checkpoint API for the watch resourceVersion; empty falls
+    # back to resumeFile. Override per environment in overlays.
+  checkpointUrl: ""
+  checkpointFlushSeconds: 10

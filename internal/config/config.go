@@ -44,12 +44,23 @@ type ElasticsearchConfig struct {
 	Index              string `yaml:"index"`
 }
 
+// PrometheusConfig configures the Prometheus gateway. Address comes from YAML
+// or PODWATCHER_PROMETHEUS_ADDRESS; the bearer token comes from
+// PODWATCHER_PROMETHEUS_TOKEN.
+type PrometheusConfig struct {
+	TimeoutSeconds     int    `yaml:"timeoutSeconds"`
+	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
+	Address            string `yaml:"address"`
+	Token              string `yaml:"token"`
+}
+
 // Config is the application configuration.
 type Config struct {
 	Log           LogConfig           `yaml:"log"`
 	Pods          PodsConfig          `yaml:"pods"`
 	Cluster       ClusterConfig       `yaml:"cluster"`
 	Elasticsearch ElasticsearchConfig `yaml:"elasticsearch"`
+	Prometheus    PrometheusConfig    `yaml:"prometheus"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -72,6 +83,7 @@ func DefaultConfig() *Config {
 			ConfigMapKey:  "currentCluster",
 		},
 		Elasticsearch: ElasticsearchConfig{PasswordEnv: "ES_PASSWORD", Index: "podwatcher-events", TimeoutSeconds: 20},
+		Prometheus:    PrometheusConfig{TimeoutSeconds: 20},
 	}
 }
 
