@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Event preserves pod metadata and status without exporting the pod spec,
+// Event preserves pod metadata without exporting the pod spec,
 // which can contain environment credentials.
 type Event struct {
 	ApplicationID string            `json:"applicationId"`
@@ -40,7 +40,6 @@ type Event struct {
 	AddedAt       *time.Time        `json:"addedAt,omitempty"`
 	DeletedAt     *time.Time        `json:"deletedAt,omitempty"`
 	Metadata      metav1.ObjectMeta `json:"metadata"`
-	Status        corev1.PodStatus  `json:"status"`
 	Node          string            `json:"node"`
 }
 
@@ -116,7 +115,7 @@ func (c *Client) Publish(ctx context.Context, eventType string, pod *corev1.Pod,
 	hash := sha256.Sum256(idBytes)
 	id := hex.EncodeToString(hash[:])
 	now := time.Now().UTC()
-	event := Event{ApplicationID: store.AppIDFromPod(pod), PodName: pod.Name, Queue: pod.Labels["queue"], Type: eventType, Cluster: c.cluster, Timestamp: now, Initial: initial, Metadata: pod.ObjectMeta, Status: pod.Status, Node: pod.Spec.NodeName}
+	event := Event{ApplicationID: store.AppIDFromPod(pod), PodName: pod.Name, Queue: pod.Labels["queue"], Type: eventType, Cluster: c.cluster, Timestamp: now, Initial: initial, Metadata: pod.ObjectMeta, Node: pod.Spec.NodeName}
 	if !pod.CreationTimestamp.IsZero() {
 		addedAt := pod.CreationTimestamp.Time.UTC()
 		event.AddedAt = &addedAt
@@ -131,8 +130,7 @@ func (c *Client) Publish(ctx context.Context, eventType string, pod *corev1.Pod,
 	return c.write(ctx, id, body)
 }
 
-// Completion is distinct from Pod events and keeps status under application
-// to avoid conflicting with the existing object-valued status ES field.
+// Completion is distinct from Pod events and keeps status under application.
 type Completion struct {
 	ApplicationID string                `json:"applicationId"`
 	PodName       string                `json:"podName"`
@@ -168,6 +166,10 @@ func (c *Client) PublishApplication(ctx context.Context, app store.ApplicationVi
 }
 
 func (c *Client) write(ctx context.Context, id string, body []byte) (err error) {
+	body, err = sanitizeDocument(body)
+	if err != nil {
+		return fmt.Errorf("sanitize Elasticsearch document: %w", err)
+	}
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("%w (%s)", err, c.authInfo)
@@ -210,6 +212,36 @@ func (c *Client) write(ctx context.Context, id string, body []byte) (err error) 
 		}
 	}
 	return err
+}
+
+// sanitizeDocument removes dot-only field names throughout objects and arrays.
+// UseNumber preserves integer precision when re-encoding the document.
+func sanitizeDocument(body []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var document interface{}
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	removeDotOnlyKeys(document)
+	return json.Marshal(document)
+}
+
+func removeDotOnlyKeys(value interface{}) {
+	switch value := value.(type) {
+	case map[string]interface{}:
+		for key, child := range value {
+			if key != "" && strings.Trim(key, ".") == "" {
+				delete(value, key)
+				continue
+			}
+			removeDotOnlyKeys(child)
+		}
+	case []interface{}:
+		for _, child := range value {
+			removeDotOnlyKeys(child)
+		}
+	}
 }
 
 const maxErrorBody = 16 * 1024

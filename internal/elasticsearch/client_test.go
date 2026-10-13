@@ -224,7 +224,7 @@ func TestPublishAuthenticationPayloadAndRetry(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 			t.Error(err)
 		}
-		if event.Cluster != "cluster-a" || event.Type != "ADDED" || event.Initial || event.Node != "node-1" || event.Status.Phase != corev1.PodRunning || event.Timestamp.IsZero() {
+		if event.Cluster != "cluster-a" || event.Type != "ADDED" || event.Initial || event.Node != "node-1" || event.Timestamp.IsZero() {
 			t.Errorf("incorrect event: %+v", event)
 		}
 		if len(paths) == 1 {
@@ -388,6 +388,9 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 		if _, exists := body["spec"]; exists {
 			t.Error("pod spec must not be exported")
 		}
+		if _, exists := body["status"]; exists {
+			t.Error("top-level pod status must not be exported")
+		}
 		encoded, _ := json.Marshal(body)
 		if strings.Contains(string(encoded), "private-env-value") {
 			t.Error("environment leaked into event")
@@ -415,9 +418,80 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 	}
 }
 
+func TestPublishSanitizesManagedFields(t *testing.T) {
+	pod := testutil.ExecutorPod("executor", "app")
+	pod.Annotations = map[string]string{"example.com/note": "keep"}
+	pod.ManagedFields = []metav1.ManagedFieldsEntry{{
+		Manager: "kubelet", FieldsType: "FieldsV1",
+		FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:labels":{".":{},"f:spark-role":{}}}}`)},
+	}}
+	calls := 0
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var document struct {
+			Metadata map[string]json.RawMessage `json:"metadata"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&document); err != nil {
+			t.Error(err)
+		}
+		var managed []metav1.ManagedFieldsEntry
+		if err := json.Unmarshal(document.Metadata["managedFields"], &managed); err != nil {
+			t.Error(err)
+		} else if len(managed) != 1 || managed[0].FieldsV1 == nil || string(managed[0].FieldsV1.Raw) != `{"f:metadata":{"f:labels":{"f:spark-role":{}}}}` {
+			t.Error("managedFields must retain valid keys and omit dot-only keys")
+		}
+		for _, field := range []string{"name", "namespace", "labels", "annotations"} {
+			got, err := json.Marshal(document.Metadata[field])
+			original, _ := json.Marshal(pod.ObjectMeta)
+			var metadata map[string]json.RawMessage
+			_ = json.Unmarshal(original, &metadata)
+			if err != nil || string(got) != string(metadata[field]) {
+				t.Errorf("metadata field %s changed", field)
+			}
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events"}, "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"ADDED", "MODIFIED", "DELETED"} {
+		if err := c.Publish(context.Background(), kind, pod, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 || len(pod.ManagedFields) != 1 || pod.ManagedFields[0].FieldsV1 == nil {
+		t.Fatal("publishing must preserve the original pod's managedFields")
+	}
+}
+
 func newTestESServer(handler http.Handler) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Elastic-Product", "Elasticsearch")
 		handler.ServeHTTP(w, r)
 	}))
+}
+
+func TestSanitizeDocument(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"nested objects and arrays", `{".":1,"..":2,"nested":{"...":3,"a.b":"keep","a.":4,".a":5},"items":[{".":0,"ok":true},[{"..":0}]],"value":"..."}`, `{"items":[{"ok":true},[{}]],"nested":{".a":5,"a.":4,"a.b":"keep"},"value":"..."}`},
+		{"preserve numbers and empty keys", `{"id":9007199254740993,"":null,"fraction":1.25,"array":[1,".",null]}`, `{"":null,"array":[1,".",null],"fraction":1.25,"id":9007199254740993}`},
+		{"invalid JSON", `{"broken":`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sanitizeDocument([]byte(tc.body))
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("expected invalid JSON error")
+				}
+				return
+			}
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("got %s, error %v; want %s", got, err, tc.want)
+			}
+		})
+	}
 }
