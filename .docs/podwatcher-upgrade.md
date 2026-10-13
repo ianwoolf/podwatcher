@@ -71,10 +71,9 @@ Pod 事件与完成应用汇总均增加三个顶层字段，便于统一查询�
 | `addedAt` | Pod 的 Kubernetes 创建时间，add 和 delete 文档均携带；创建时间未知时省略，不以观察时间替代。 |
 | `deletedAt` | 仅 delete 文档携带，表示 podwatcher 观察到删除事件的时间；回放或重新 List 对账时为本次观察时间。 |
 | `metadata` | Pod ObjectMeta，包含名称、namespace、UID、resourceVersion、labels 等。 |
-| `status` | PodStatus 对象。 |
 | `node` | Pod 所在节点。 |
 
-不导出 Pod spec。原有 `/events` 接口仍只保存 driver 诊断事件，原始 Pod MODIFIED 事件不写入 ES。
+不导出 Pod spec，也不导出与 `podName` 平级的 `status`（PodStatus 对象）。应用汇总中的 `application.status` 保留。该变更仅影响新写入文档，不清理已有 ES 文档。原有 `/events` 接口仍只保存 driver 诊断事件，原始 Pod MODIFIED 事件不写入 ES。
 
 `deletedAt` 不表示 Kubernetes 历史上实际删除的时刻，也不使用 `metadata.deletionTimestamp`（该字段表示请求删除的时间）。删除文档同时保留创建时间，便于后续分析生命周期。`@timestamp` 仍表示本次发送开始时间。
 
@@ -107,7 +106,7 @@ driver 进入 `Succeeded`、`Failed`，或被删除时，认为应用达到终�
 }
 ```
 
-`application` 包含完整 ApplicationView，包括应用标识、Spark 名称、namespace、driver 名称、标签、状态、创建时间、状态变更时间和删除时间等。应用状态放在 `application.status`，避免与 Pod 文档对象类型的顶层 `status` 产生 ES mapping 冲突。
+`application` 包含完整 ApplicationView，包括应用标识、Spark 名称、namespace、driver 名称、标签、状态、创建时间、状态变更时间和删除时间等。应用状态保留在 `application.status`，Pod 事件不再导出顶层 `status`。
 
 完成时间规则：
 

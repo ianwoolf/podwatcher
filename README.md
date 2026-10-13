@@ -28,7 +28,7 @@ All adds and deletes passing the existing `spark-role=driver|executor` and
 `appSparkID` filter are written as separate ES documents. Startup snapshot
 adds are included as `ADDED` with `isInitialSnapshot: true`; raw Pod updates are not exported.
 Documents contain `type`, `cluster`, `@timestamp`, `isInitialSnapshot`, `metadata`,
-`status`, and `node`. The pod spec is omitted. The existing `/events` diagnostic
+and `node`. Pod spec and top-level Pod `status` are omitted. The existing `/events` diagnostic
 API remains driver-only.
 
 Both Pod events and application summaries expose top-level `applicationId`,
@@ -116,8 +116,8 @@ than creating another record.
 
 `application` contains the full application view, including driver labels,
 creation/change times and any deletion time. Status lives under
-`application.status` to avoid a mapping conflict with the object-valued
-Pod event `status`. A driver deleted after success/failure retains that
+`application.status`; Pod events omit the top-level `status` field.
+A driver deleted after success/failure retains that
 completion outcome in the ES summary. A driver deleted before a terminal
 phase has status `deleted`.
 

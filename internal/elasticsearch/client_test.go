@@ -224,7 +224,7 @@ func TestPublishAuthenticationPayloadAndRetry(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 			t.Error(err)
 		}
-		if event.Cluster != "cluster-a" || event.Type != "ADDED" || event.Initial || event.Node != "node-1" || event.Status.Phase != corev1.PodRunning || event.Timestamp.IsZero() {
+		if event.Cluster != "cluster-a" || event.Type != "ADDED" || event.Initial || event.Node != "node-1" || event.Timestamp.IsZero() {
 			t.Errorf("incorrect event: %+v", event)
 		}
 		if len(paths) == 1 {
@@ -387,6 +387,9 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 		}
 		if _, exists := body["spec"]; exists {
 			t.Error("pod spec must not be exported")
+		}
+		if _, exists := body["status"]; exists {
+			t.Error("top-level pod status must not be exported")
 		}
 		encoded, _ := json.Marshal(body)
 		if strings.Contains(string(encoded), "private-env-value") {
