@@ -168,6 +168,10 @@ func (c *Client) PublishApplication(ctx context.Context, app store.ApplicationVi
 }
 
 func (c *Client) write(ctx context.Context, id string, body []byte) (err error) {
+	body, err = sanitizeDocument(body)
+	if err != nil {
+		return fmt.Errorf("sanitize Elasticsearch document: %w", err)
+	}
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("%w (%s)", err, c.authInfo)
@@ -210,6 +214,36 @@ func (c *Client) write(ctx context.Context, id string, body []byte) (err error) 
 		}
 	}
 	return err
+}
+
+// sanitizeDocument removes dot-only field names throughout objects and arrays.
+// UseNumber preserves integer precision when re-encoding the document.
+func sanitizeDocument(body []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var document interface{}
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	removeDotOnlyKeys(document)
+	return json.Marshal(document)
+}
+
+func removeDotOnlyKeys(value interface{}) {
+	switch value := value.(type) {
+	case map[string]interface{}:
+		for key, child := range value {
+			if key != "" && strings.Trim(key, ".") == "" {
+				delete(value, key)
+				continue
+			}
+			removeDotOnlyKeys(child)
+		}
+	case []interface{}:
+		for _, child := range value {
+			removeDotOnlyKeys(child)
+		}
+	}
 }
 
 const maxErrorBody = 16 * 1024
