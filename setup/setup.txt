@@ -24,7 +24,21 @@ helm install spark-operator spark-operator/spark-operator \
  --create-namespace \
  --set controller.batchScheduler.enable=true \
  --set controller.batchScheduler.default=yunikorn
-kubectl apply -f spark-pi.yaml
+kubectl apply -f spark-pi.yml
 
 export k8s cluster config so that it can be read from podwatcher
 kind export kubeconfig --name yunikorn-cluster --kubeconfig ~/.kube/kind-config
+
+
+install prometheus:
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --create-namespace \
+  --set grafana.adminPassword=admin \
+  --set prometheus.prometheusSpec.resources.limits.cpu=500m \
+  --set prometheus.prometheusSpec.resources.limits.memory=512Mi
+kubectl get pods -n monitoring
+kubectl port-forward svc/monitoring-kube-prometheus-prometheus -n monitoring 9090:9090
+kubectl port-forward svc/monitoring-grafana -n monitoring 3000:80
