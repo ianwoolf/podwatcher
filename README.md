@@ -36,7 +36,8 @@ Both Pod events and application summaries expose top-level `applicationId`,
 the existing `appSparkID` resolution; `podName` uses the Pod name. Summaries
 use the application's id and driver Pod name. `queue` comes from the Pod's
 `queue` label (driver labels for summaries); absent values are empty strings.
-Original metadata and application fields are retained.
+Original metadata and application fields are retained except
+`metadata.managedFields`, which is omitted from ES Pod documents.
 
 Both add and delete documents carry `addedAt` from the Pod's Kubernetes
 creation timestamp (omitted if unknown). Delete documents additionally carry
@@ -64,6 +65,16 @@ approximately 60.6 seconds with the default setting. Publishing is synchronous a
 slow watch processing; after retries are exhausted, the error is logged and
 watch processing continues. There is no durable delivery queue: prolonged ES
 outages can lose exported events even though local state/checkpoints advance.
+
+Set `elasticsearch.isDebug: true` to log the full actual JSON document
+when ES publishing fails (Pod events and application summaries). It defaults
+to false and requires no command-line verbosity flag. The debug payload
+is accompanied by publishing-start and publishing-success logs. Startup always
+logs the loaded configuration path and whether ES publishing is enabled;
+an empty `elasticsearch.address` is reported as disabled.
+The debug payload
+reflects document sanitization and redacts the configured ES password; it
+does not include authentication headers. Normal error logs omit this payload.
 
 For a self-signed HTTPS endpoint, set `elasticsearch.insecureSkipVerify: true`
 to disable server certificate chain and hostname verification. It defaults to
@@ -139,6 +150,11 @@ Completion publishing uses the same retry policy and delivery limitations
 as Pod events described above.
 
 ## build & push image
+
+The Dockerfile uses BuildKit cache mounts for Go modules and compilation.
+It builds without `-a`, so subsequent builds reuse unchanged dependencies.
+The first build on a new builder still compiles all dependencies; keep the
+same builder and its cache for faster rebuilds. BuildKit is required.
 
 ```bash
 ./scripts/build_image.sh -t 0.0.2 -p

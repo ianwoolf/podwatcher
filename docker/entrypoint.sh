@@ -36,4 +36,4 @@ esac
 echo "logrotate configured: maxsize=${LOG_MAX_SIZE}, check every ${LOG_ROTATE_INTERVAL}"
 
 # 启动应用
-exec ./podwatcher
+exec ./podwatcher "$@"

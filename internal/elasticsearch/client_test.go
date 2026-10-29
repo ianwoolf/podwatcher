@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +20,30 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestFailedDocumentDebugPayload(t *testing.T) {
+	var sent []byte
+	srv := newTestESServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	c, err := NewClient(config.ElasticsearchConfig{Address: srv.URL, Index: "events"}, "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Publish(context.Background(), "ADDED", testutil.ExecutorPod("executor", "app"), false)
+	var failure *PublishError
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected payload error, got %v", err)
+	}
+	if failure.DebugPayload() != string(sent) {
+		t.Fatal("debug payload must equal the actual request JSON")
+	}
+	if strings.Contains(err.Error(), "\"podName\"") {
+		t.Fatal("payload must not appear in normal error message")
+	}
+}
 
 func TestTimeoutConfiguration(t *testing.T) {
 	for _, tc := range []struct {
@@ -391,6 +417,13 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 		if _, exists := body["status"]; exists {
 			t.Error("top-level pod status must not be exported")
 		}
+		var metadata map[string]json.RawMessage
+		if err := json.Unmarshal(body["metadata"], &metadata); err != nil {
+			t.Error(err)
+		}
+		if _, exists := metadata["managedFields"]; exists {
+			t.Error("metadata.managedFields must not be exported")
+		}
 		encoded, _ := json.Marshal(body)
 		if strings.Contains(string(encoded), "private-env-value") {
 			t.Error("environment leaked into event")
@@ -403,6 +436,7 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	pod := testutil.WithUID(testutil.ExecutorPod("executor", "app"), "uid")
+	pod.ManagedFields = []metav1.ManagedFieldsEntry{{Manager: "test-manager", Operation: metav1.ManagedFieldsOperationApply, APIVersion: "v1"}}
 	pod.ResourceVersion = "123"
 	pod.Spec.Containers = []corev1.Container{{Name: "main", Env: []corev1.EnvVar{{Name: "PASSWORD", Value: "private-env-value"}}}}
 	for _, event := range []struct {
@@ -416,9 +450,12 @@ func TestLifecycleDocumentIDsAndNoPodSpec(t *testing.T) {
 	if paths[0] != paths[1] || paths[0] == paths[2] || paths[0] == paths[3] || paths[2] == paths[3] {
 		t.Fatalf("incorrect document IDs: %v", paths)
 	}
+	if len(pod.ManagedFields) != 1 {
+		t.Fatal("publishing must not modify the original Pod metadata")
+	}
 }
 
-func TestPublishSanitizesManagedFields(t *testing.T) {
+func TestPublishOmitsManagedFields(t *testing.T) {
 	pod := testutil.ExecutorPod("executor", "app")
 	pod.Annotations = map[string]string{"example.com/note": "keep"}
 	pod.ManagedFields = []metav1.ManagedFieldsEntry{{
@@ -434,11 +471,8 @@ func TestPublishSanitizesManagedFields(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&document); err != nil {
 			t.Error(err)
 		}
-		var managed []metav1.ManagedFieldsEntry
-		if err := json.Unmarshal(document.Metadata["managedFields"], &managed); err != nil {
-			t.Error(err)
-		} else if len(managed) != 1 || managed[0].FieldsV1 == nil || string(managed[0].FieldsV1.Raw) != `{"f:metadata":{"f:labels":{"f:spark-role":{}}}}` {
-			t.Error("managedFields must retain valid keys and omit dot-only keys")
+		if _, exists := document.Metadata["managedFields"]; exists {
+			t.Error("managedFields must be omitted")
 		}
 		for _, field := range []string{"name", "namespace", "labels", "annotations"} {
 			got, err := json.Marshal(document.Metadata[field])

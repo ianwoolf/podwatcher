@@ -75,6 +75,8 @@ Pod 事件与完成应用汇总均增加三个顶层字段，便于统一查询�
 
 不导出 Pod spec，也不导出与 `podName` 平级的 `status`（PodStatus 对象）。应用汇总中的 `application.status` 保留。该变更仅影响新写入文档，不清理已有 ES 文档。原有 `/events` 接口仍只保存 driver 诊断事件，原始 Pod MODIFIED 事件不写入 ES。
 
+`metadata.managedFields` 也从 ES Pod 文档中省略。清理只作用于发送文档的 metadata 副本，不修改 informer 的原始 Pod；失败调试日志同样不包含该字段。
+
 `deletedAt` 不表示 Kubernetes 历史上实际删除的时刻，也不使用 `metadata.deletionTimestamp`（该字段表示请求删除的时间）。删除文档同时保留创建时间，便于后续分析生命周期。`@timestamp` 仍表示本次发送开始时间。
 
 此次将原先不够直观的 `initial` 字段改名为 `isInitialSnapshot`，仅改变新写入格式，未迁移 ES 中已经存在的旧文档。
@@ -161,6 +163,23 @@ GOCACHE=/tmp/podwatcher-upgrade-go-cache make test
 未连接真实 ES 或部署到集群。当前改动尚未提交。
 
 ## 当前限制
+
+### 镜像构建加速（2026-10-13）
+
+Dockerfile 移除 `go build -a`，不再强制重编译全部依赖；同时移除不再需要的
+`-installsuffix cgo`，保留 `CGO_ENABLED=0`。通过 BuildKit cache mount 缓存
+`/go/pkg/mod` 和 `/root/.cache/go-build`，使源码变化后仍可复用依赖下载和
+编译缓存。需要 BuildKit；首次构建或更换 builder、清理缓存后仍需完整编译。
+
+### ES 失败时的调试数据（2026-10-13）
+
+Pod 事件和应用汇总发布失败时，在 handler 错误日志附近补充完整实际发送
+JSON 的调试日志。通过配置 `elasticsearch.isDebug: true` 开启，
+默认 false；无需命令行 `-v=2`。普通错误日志不包含 payload。
+输出使用发送前字段清理后的文档，不截断字段；已配置的 ES 密码会脱敏，
+不输出认证请求头。该日志用于排查 ES mapping 错误和核对实际数据字段。
+
+为排查没有 ES 请求的情况，启动日志记录配置来源与 ES 是否启用；地址为空时明确警告发送已关闭。`isDebug: true` 时还记录 Pod 事件和应用汇总发送开始、发送成功，失败仍输出错误和完整数据。只处理 `spark-role=driver|executor` 且 `appSparkID` 非空的 Pod；普通运行状态更新不发送 add/del 文档。
 
 ### ES SDK（2026-10-08）
 

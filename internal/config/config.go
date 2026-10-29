@@ -36,6 +36,7 @@ type ClusterConfig struct {
 
 // ElasticsearchConfig configures lifecycle event indexing. An empty address disables it.
 type ElasticsearchConfig struct {
+	IsDebug            bool   `yaml:"isDebug"`
 	TimeoutSeconds     int    `yaml:"timeoutSeconds"`
 	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
 	Address            string `yaml:"address"`
@@ -54,6 +55,12 @@ type PrometheusConfig struct {
 	Token              string `yaml:"token"`
 }
 
+// TracingConfig configures OpenTelemetry trace export over OTLP/HTTP.
+// An empty endpoint disables tracing.
+type TracingConfig struct {
+	Endpoint string `yaml:"endpoint"` // OTLP/HTTP collector endpoint, e.g. http://opentelemetry-collector-collector.otel.svc.cluster.local:4318
+}
+
 // Config is the application configuration.
 type Config struct {
 	Log           LogConfig           `yaml:"log"`
@@ -61,6 +68,7 @@ type Config struct {
 	Cluster       ClusterConfig       `yaml:"cluster"`
 	Elasticsearch ElasticsearchConfig `yaml:"elasticsearch"`
 	Prometheus    PrometheusConfig    `yaml:"prometheus"`
+	Tracing       TracingConfig       `yaml:"tracing"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -84,6 +92,9 @@ func DefaultConfig() *Config {
 		},
 		Elasticsearch: ElasticsearchConfig{PasswordEnv: "ES_PASSWORD", Index: "podwatcher-events", TimeoutSeconds: 20},
 		Prometheus:    PrometheusConfig{TimeoutSeconds: 20},
+		Tracing: TracingConfig{
+			Endpoint: "http://opentelemetry-collector-collector.otel.svc.cluster.local:4318",
+		},
 	}
 }
 
@@ -149,6 +160,10 @@ func Load(configPath string) (*Config, error) {
 	}
 	if v := os.Getenv("PODWATCHER_CLUSTER_CM_KEY"); v != "" {
 		cfg.Cluster.ConfigMapKey = v
+	}
+
+	if v := os.Getenv("PODWATCHER_OTEL_ENDPOINT"); v != "" {
+		cfg.Tracing.Endpoint = v
 	}
 
 	return cfg, nil

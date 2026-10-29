@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,9 +9,69 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/metric"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 )
+
+// durationBuckets cover sub-millisecond up to 10s latencies of in-memory
+// store operations, dense enough at the low end for p95/p99 to be meaningful.
+var durationBuckets = []float64{0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
+var (
+	durationOnce  sync.Once
+	durationHist  otelmetric.Float64Histogram
+	durationGauge otelmetric.Float64Gauge
+)
+
+// measureFunc starts a wall-clock timer for a Store method and returns the
+// end function recording it into two instruments (attribute function=<name>):
+//   - podwatcher.store.function.duration histogram: bucketed durations for
+//     histogram_quantile (p80/p90/p99) and _sum/_count (mean) on the backend;
+//   - podwatcher.store.function.duration.last gauge: last observed duration,
+//     so backends can approximate the max with max_over_time.
+//
+// The instruments are created lazily on first use: a package-level creation
+// would bind to the no-op global MeterProvider before main installs the real
+// one.
+func measureFunc(function string) func() {
+	start := time.Now()
+	return func() {
+		elapsed := time.Since(start).Seconds()
+		durationOnce.Do(func() {
+			meter := otel.Meter("podwatcher/store")
+			h, err := meter.Float64Histogram(
+				"podwatcher.store.function.duration",
+				otelmetric.WithUnit("s"),
+				otelmetric.WithExplicitBucketBoundaries(durationBuckets...),
+			)
+			if err != nil {
+				klog.Warningf("Failed to create store duration histogram: %v", err)
+				return
+			}
+			g, err := meter.Float64Gauge(
+				"podwatcher.store.function.duration.last",
+				otelmetric.WithUnit("s"),
+			)
+			if err != nil {
+				klog.Warningf("Failed to create store duration gauge: %v", err)
+			}
+			durationHist = h
+			durationGauge = g
+		})
+		if durationHist == nil {
+			return
+		}
+		attrs := otelmetric.WithAttributes(attribute.String("function", function))
+		durationHist.Record(context.Background(), elapsed, attrs)
+		if durationGauge != nil {
+			durationGauge.Record(context.Background(), elapsed, attrs)
+		}
+	}
+}
 
 // ApplicationRecord is the log-analysis credential for one Spark
 // application. Downstream uses applicationId to fetch the event log from the
@@ -109,6 +170,7 @@ func WithCluster(cluster string) Option {
 // NewStore loads any persisted state from filePath (if set) and starts a
 // background flush loop. A non-positive limit uses the default.
 func NewStore(filePath string, maxApps, maxPods int, opts ...Option) *Store {
+	defer measureFunc("Store.NewStore")()
 	if maxApps <= 0 {
 		maxApps = 10000
 	}
@@ -134,6 +196,7 @@ func NewStore(filePath string, maxApps, maxPods int, opts ...Option) *Store {
 
 // Stop terminates the flush loop and performs a final save.
 func (s *Store) Stop() {
+	defer measureFunc("Store.Stop")()
 	close(s.stopCh)
 	s.save()
 }
@@ -143,6 +206,7 @@ func (s *Store) Stop() {
 // changedAt; executor churn merely refreshes lastUpdatedAt and never reaches
 // the incremental feed.
 func (s *Store) UpsertPod(pod *corev1.Pod, deleted bool) {
+	defer measureFunc("Store.UpsertPod")()
 	s.upsert(pod, deleted, false)
 }
 
@@ -153,6 +217,7 @@ func (s *Store) UpsertPod(pod *corev1.Pod, deleted bool) {
 // snapshot cannot flood the incremental feed; pod lastUpdatedAt is anchored to
 // the container start time and deletion is never implied.
 func (s *Store) BootstrapPod(pod *corev1.Pod) {
+	defer measureFunc("Store.BootstrapPod")()
 	s.upsert(pod, false, true)
 }
 
@@ -409,6 +474,7 @@ func containerTimes(pod *corev1.Pod) (started, finished *time.Time) {
 // cascades the deletion to every pod owned by them, all in the same critical
 // section. It returns the number of evicted applications.
 func (s *Store) evictAppsLocked() int {
+	defer measureFunc("Store.evictAppsLocked")()
 	evicted := 0
 	for len(s.apps) > s.maxApps {
 		var oldestID string
@@ -429,6 +495,7 @@ func (s *Store) evictAppsLocked() int {
 		s.deleteAppLocked(oldestID)
 		evicted++
 	}
+	recordAppEvictions(evicted)
 	return evicted
 }
 
@@ -437,11 +504,14 @@ func (s *Store) evictAppsLocked() int {
 func (s *Store) deleteAppLocked(appID string) {
 	delete(s.apps, appID)
 	delete(s.driverByApp, appID)
+	cascaded := 0
 	for key, rec := range s.pods {
 		if rec.ApplicationID == appID {
 			delete(s.pods, key)
+			cascaded++
 		}
 	}
+	recordPodCascadeDeletes(cascaded)
 }
 
 // evictPodsLocked removes over-limit deleted pod records oldest-first. A live
@@ -449,6 +519,7 @@ func (s *Store) deleteAppLocked(appID string) {
 // application no longer exists are eligible. It returns the number removed and
 // warns once per overflow episode when no reclaimable record remains.
 func (s *Store) evictPodsLocked() int {
+	defer measureFunc("Store.evictPodsLocked")()
 	removed := 0
 	if len(s.pods) <= s.maxPods {
 		s.overLimitWarned = false
@@ -489,11 +560,13 @@ func (s *Store) evictPodsLocked() int {
 	} else {
 		s.overLimitWarned = false
 	}
+	recordPodEvictions(removed)
 	return removed
 }
 
 // GetApplication returns one application joined with its driver pod fields.
 func (s *Store) GetApplication(appID string) (ApplicationView, bool) {
+	defer measureFunc("Store.GetApplication")()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rec, ok := s.apps[appID]
@@ -510,6 +583,7 @@ func (s *Store) GetApplication(appID string) (ApplicationView, bool) {
 // exists. Evicted applications can never be returned, so a since older than
 // the retained window may miss terminal states.
 func (s *Store) GetChanges(since time.Time, limit int, appID string, statuses []string) (views []ApplicationView, hasMore bool) {
+	defer measureFunc("Store.GetChanges")()
 	statusSet := make(map[string]struct{}, len(statuses))
 	for _, st := range statuses {
 		if st != "" {
@@ -567,6 +641,7 @@ func (s *Store) viewLocked(rec ApplicationRecord) ApplicationView {
 // GetPodRecords returns pod records matching filter, ordered by lastUpdatedAt
 // descending and optionally truncated to filter.Limit.
 func (s *Store) GetPodRecords(filter PodRecordFilter) []PodRecord {
+	defer measureFunc("Store.GetPodRecords")()
 	s.mu.RLock()
 	result := make([]PodRecord, 0, len(s.pods))
 	for _, rec := range s.pods {
@@ -644,6 +719,7 @@ func (s *Store) load() {
 		s.dirty = true
 	}
 	s.mu.Unlock()
+	recordStoreSizes(len(s.apps), len(s.pods))
 	klog.Infof("Loaded %d applications and %d pod records from %s", len(snapshot.Applications), len(snapshot.Pods), s.filePath)
 }
 
@@ -734,6 +810,7 @@ func (s *Store) save() {
 		s.mu.Unlock()
 		return
 	}
+	defer measureFunc("Store.save")()
 	s.dirty = false
 	snapshot := stateSnapshot{
 		Version:      1,
@@ -746,28 +823,35 @@ func (s *Store) save() {
 	for _, rec := range s.pods {
 		snapshot.Pods = append(snapshot.Pods, *rec)
 	}
+	recordStoreSizes(len(snapshot.Applications), len(snapshot.Pods))
 	s.mu.Unlock()
 
 	if dir := filepath.Dir(s.filePath); dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			klog.Warningf("Failed to create state dir %s: %v", dir, err)
+			recordSaveFailure()
 			return
 		}
 	}
 
 	data, err := json.Marshal(snapshot)
 	if err != nil {
+		recordSaveFailure()
 		return
 	}
 
 	tmp := s.filePath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		klog.Warningf("Failed to write state file: %v", err)
+		recordSaveFailure()
 		return
 	}
 	if err := os.Rename(tmp, s.filePath); err != nil {
 		klog.Warningf("Failed to finalize state file: %v", err)
+		recordSaveFailure()
+		return
 	}
+	recordSaveBytes(len(data))
 }
 
 // SparkRole returns the spark-role label (driver/executor) when the pod

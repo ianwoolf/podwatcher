@@ -61,6 +61,8 @@ cluster:
   configMapKey: "currentCluster"
 
 elasticsearch:
+  # Log full actual document JSON only when ES publishing fails.
+  isDebug: false
   # Per-attempt timeout in seconds; retries may take up to three attempts.
   timeoutSeconds: 20
   # Set true to skip HTTPS certificate and hostname verification.

@@ -116,6 +116,8 @@ func (c *Client) Publish(ctx context.Context, eventType string, pod *corev1.Pod,
 	id := hex.EncodeToString(hash[:])
 	now := time.Now().UTC()
 	event := Event{ApplicationID: store.AppIDFromPod(pod), PodName: pod.Name, Queue: pod.Labels["queue"], Type: eventType, Cluster: c.cluster, Timestamp: now, Initial: initial, Metadata: pod.ObjectMeta, Node: pod.Spec.NodeName}
+	// Strip field ownership bookkeeping from the document's metadata copy.
+	event.Metadata.ManagedFields = nil
 	if !pod.CreationTimestamp.IsZero() {
 		addedAt := pod.CreationTimestamp.Time.UTC()
 		event.AddedAt = &addedAt
@@ -165,6 +167,17 @@ func (c *Client) PublishApplication(ctx context.Context, app store.ApplicationVi
 	return c.write(ctx, hex.EncodeToString(hash[:]), body)
 }
 
+// PublishError carries the actual sanitized document for debug logging only.
+// Error deliberately excludes the payload from normal error logs.
+type PublishError struct {
+	Err     error
+	payload string
+}
+
+func (e *PublishError) Error() string        { return e.Err.Error() }
+func (e *PublishError) Unwrap() error        { return e.Err }
+func (e *PublishError) DebugPayload() string { return e.payload }
+
 func (c *Client) write(ctx context.Context, id string, body []byte) (err error) {
 	body, err = sanitizeDocument(body)
 	if err != nil {
@@ -172,7 +185,7 @@ func (c *Client) write(ctx context.Context, id string, body []byte) (err error) 
 	}
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("%w (%s)", err, c.authInfo)
+			err = &PublishError{Err: fmt.Errorf("%w (%s)", err, c.authInfo), payload: c.redact.Replace(string(body))}
 		}
 	}()
 	for attempt := 0; attempt < 3; attempt++ {
